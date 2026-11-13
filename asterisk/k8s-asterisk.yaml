@@ -1,0 +1,77 @@
+# =========================================================================
+# MANIFIESTO KUBERNETES PARA ASTERISK 20 (CERO PROBLEMAS DE NAT)
+# =========================================================================
+# Al usar hostNetwork: true, el pod se enlaza directamente a la interfaz de
+# red del nodo (IP pública), eliminando la doble NAT y kube-proxy para RTP/SIP.
+# =========================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asterisk-pbx
+  namespace: default
+  labels:
+    app: asterisk-pbx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: asterisk-pbx
+  template:
+    metadata:
+      labels:
+        app: asterisk-pbx
+    spec:
+      hostNetwork: true # Clave técnica para evitar NAT en SIP/RTP
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: asterisk
+          image: mi-registro.com/asterisk-20:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            capabilities:
+              add: ["SYS_PTRACE", "NET_ADMIN"]
+          ports:
+            - name: sip-udp
+              containerPort: 5060
+              protocol: UDP
+            - name: sip-tcp
+              containerPort: 5060
+              protocol: TCP
+            - name: webrtc-ws
+              containerPort: 8088
+              protocol: TCP
+            - name: rtp-range
+              containerPort: 10000
+              protocol: UDP
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+---
+# Servicio mixto TCP / UDP (Compatible con K8s 1.26+)
+apiVersion: v1
+kind: Service
+metadata:
+  name: asterisk-service
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    app: asterisk-pbx
+  ports:
+    - name: sip-udp
+      port: 5060
+      targetPort: 5060
+      protocol: UDP
+    - name: sip-tcp
+      port: 5060
+      targetPort: 5060
+      protocol: TCP
+    - name: webrtc-ws
+      port: 8088
+      targetPort: 8088
+      protocol: TCP

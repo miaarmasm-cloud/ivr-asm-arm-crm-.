@@ -1,0 +1,183 @@
+# =========================================================================
+# STACK COMPLETO KUBERNETES: LIVEKIT SERVER + SIP GATEWAY + AGENTE ARM
+# =========================================================================
+# Maneja puertos mixtos TCP y UDP. 
+# El SIP Gateway corre con hostNetwork: true para evitar problemas de NAT.
+# =========================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ivr-arm-system
+---
+# 1. Configuración de LiveKit Server y SIP Gateway
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: livekit-config
+  namespace: ivr-arm-system
+data:
+  livekit.yaml: |
+    port: 7880
+    rtc:
+      tcp_port: 7881
+      port_range_start: 50000
+      port_range_end: 50100
+      use_external_ip: true
+    keys:
+      devkey: secretkey_super_segura_livekit_2026
+  sip.yaml: |
+    api_key: devkey
+    api_secret: secretkey_super_segura_livekit_2026
+    ws_url: ws://livekit-server-service:7880
+    sip_port: 5060
+    rtp_port_range_start: 10000
+    rtp_port_range_end: 10100
+---
+# 2. Despliegue de LiveKit Server (Media & WebRTC)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: livekit-server
+  namespace: ivr-arm-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: livekit-server
+  template:
+    metadata:
+      labels:
+        app: livekit-server
+    spec:
+      containers:
+        - name: livekit-server
+          image: livekit/livekit-server:latest
+          args: ["--config", "/etc/livekit/livekit.yaml"]
+          ports:
+            - name: http-ws
+              containerPort: 7880
+              protocol: TCP
+            - name: rtc-tcp
+              containerPort: 7881
+              protocol: TCP
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/livekit
+      volumes:
+        - name: config-volume
+          configMap:
+            name: livekit-config
+---
+# Servicio Interno para LiveKit Server
+apiVersion: v1
+kind: Service
+metadata:
+  name: livekit-server-service
+  namespace: ivr-arm-system
+spec:
+  selector:
+    app: livekit-server
+  ports:
+    - name: http-ws
+      port: 7880
+      targetPort: 7880
+      protocol: TCP
+    - name: rtc-tcp
+      port: 7881
+      targetPort: 7881
+      protocol: TCP
+---
+# 3. Despliegue de LiveKit SIP Gateway (Puertos SIP UDP/TCP y RTP)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: livekit-sip
+  namespace: ivr-arm-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: livekit-sip
+  template:
+    metadata:
+      labels:
+        app: livekit-sip
+    spec:
+      hostNetwork: true # Clave para evitar problemas de NAT en SIP y RTP
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: livekit-sip
+          image: livekit/sip:latest
+          args: ["--config", "/etc/livekit/sip.yaml"]
+          ports:
+            - name: sip-udp
+              containerPort: 5060
+              protocol: UDP
+            - name: sip-tcp
+              containerPort: 5060
+              protocol: TCP
+            - name: rtp-range
+              containerPort: 10000
+              protocol: UDP
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/livekit
+      volumes:
+        - name: config-volume
+          configMap:
+            name: livekit-config
+---
+# 4. Despliegue del Agente ARM Python (El Cerebro con ElevenLabs + CBR)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: livekit-arm-agent
+  namespace: ivr-arm-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: livekit-arm-agent
+  template:
+    metadata:
+      labels:
+        app: livekit-arm-agent
+    spec:
+      containers:
+        - name: arm-agent
+          image: ghcr.io/tu-usuario/livekit-arm-agent:latest
+          imagePullPolicy: Always
+          env:
+            - name: LIVEKIT_URL
+              value: "ws://livekit-server-service:7880"
+            - name: LIVEKIT_API_KEY
+              value: "devkey"
+            - name: LIVEKIT_API_SECRET
+              value: "secretkey_super_segura_livekit_2026"
+            # Credenciales cargadas desde un Secret de Kubernetes
+            - name: DEEPGRAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-credentials
+                  key: deepgram-key
+            - name: ELEVENLABS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-credentials
+                  key: elevenlabs-key
+            - name: GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-credentials
+                  key: gemini-key
+            - name: SUPABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ai-credentials
+                  key: supabase-url
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-credentials
+                  key: supabase-key
