@@ -31,10 +31,14 @@ from livekit.agents import (
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, elevenlabs, silero, google, openai
 from supabase import create_client, Client
+from mcp_bridge import MCPBridge
 
 load_dotenv()
 logger = logging.getLogger("ivr-arm-agent")
 logging.basicConfig(level=logging.INFO)
+
+# Inicializar cliente del Servidor MCP
+mcp_bridge = MCPBridge()
 
 # Configuración de Clientes
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project.supabase.co")
