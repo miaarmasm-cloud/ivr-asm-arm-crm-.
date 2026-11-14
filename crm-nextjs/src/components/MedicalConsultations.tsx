@@ -47,6 +47,22 @@ const PLANTILLA_MEDICOS = [
   { nombre: 'Dra. Sofía Navarro', especialidad: 'Laboratorio y Diagnóstico Clínico' }
 ];
 
+// Horarios estándar de consulta clínica homologados con IVR
+const HORARIOS_CLINICA = [
+  '09:00',
+  '10:00',
+  '10:30',
+  '11:00',
+  '12:00',
+  '13:00',
+  '14:00',
+  '15:00',
+  '15:30',
+  '16:00',
+  '17:00',
+  '18:00'
+];
+
 export default function MedicalConsultations({ onCallPatient }: MedicalConsultationsProps) {
   // Estado del CallerID actual
   const [callerId, setCallerId] = useState<string>('1001');
@@ -55,11 +71,11 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
 
   // Datos del Paciente e Historial
   const [isExistingPatient, setIsExistingPatient] = useState<boolean>(true);
-  const [patientName, setPatientName] = useState<string>('Carlos Mendoza Ortiz');
+  const [patientName, setPatientName] = useState<string>('Anto Krpax X');
   const [clinicalHistory, setClinicalHistory] = useState<HistorialClinico | null>({
     id: 'hc-1',
     caller_id: '1001',
-    paciente_nombre: 'Carlos Mendoza Ortiz',
+    paciente_nombre: 'Anto Krpax X',
     fecha_ultima_consulta: '2026-10-12',
     ultimo_motivo: 'Revisión y monitoreo de presión arterial',
     diagnostico_previo: 'Presión arterial sistólica ligeramente elevada (135/88 mmHg). Se recomendó seguimiento mensual y control de sodio.',
@@ -67,8 +83,9 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
     doctor_asignado: 'Dra. Mariana Fernández'
   });
 
-  // Lista de Citas Médicas desde citas_calendario
+  // Lista de Citas Médicas desde citas_calendario (filtro de vista y todas para cálculo de ocupación)
   const [citas, setCitas] = useState<CitaMedica[]>([]);
+  const [todasLasCitas, setTodasLasCitas] = useState<CitaMedica[]>([]);
   const [loadingCitas, setLoadingCitas] = useState<boolean>(false);
 
   // Formulario de Nueva Cita
@@ -95,31 +112,77 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
   const [resolucionTexto, setResolucionTexto] = useState<{ [id: string]: string }>({});
   const [resolvingId, setResolvingId] = useState<string | null>(null);
 
-  // Diálogo Interactivo Simulado con Gemini IA (Opción 4 IVR)
-  const [chatMessages, setChatMessages] = useState<Array<{ role: 'ai' | 'patient' | 'system'; text: string; time: string }>>([
-    {
-      role: 'system',
-      text: 'Llamada entrante detectada en IVR Asterisk (Opción 4: Citas Médicas). CallerID: 1001 reconocido.',
-      time: '10:00:01'
-    },
-    {
-      role: 'ai',
-      text: '¡Hola, Carlos Mendoza! Bienvenido al servicio clínico asistido por IA de ARM Salud. Veo que tu última visita fue el 12 de septiembre por control de presión arterial. ¿En qué podemos ayudarte el día de hoy?',
-      time: '10:00:03'
-    },
-    {
-      role: 'patient',
-      text: 'Hola, doctor IA. He tenido ligeros mareos por la mañana y requiero agendar una cita de seguimiento con mi médico de cabecera, el Dr. Alejandro Morales.',
-      time: '10:00:08'
-    },
-    {
-      role: 'ai',
-      text: 'Comprendo perfectamente, Carlos. Según tu historial previo de Hipertensión Grado 1, es fundamental evaluar tu régimen actual. Procedo a verificar la disponibilidad del Dr. Alejandro Morales...',
-      time: '10:00:12'
-    }
-  ]);
+  // Diálogo Interactivo Dinámico con Gemini IA (Opción 4 IVR)
+  const [chatMessages, setChatMessages] = useState<Array<{ role: 'ai' | 'patient' | 'system'; text: string; time: string }>>([]);
+  const [inputMessage, setInputMessage] = useState<string>('');
 
-  const medicoCabeceraActual = clinicalHistory?.doctor_asignado || 'Dr. Alejandro Morales';
+  const medicoCabeceraActual = clinicalHistory?.doctor_asignado || nuevoDoctor || 'Dra. Mariana Fernández';
+
+  // Cálculo de horarios ocupados para el médico y fecha seleccionados
+  const citasOcupadasEnFecha = todasLasCitas.filter(
+    (c) => c.fecha === nuevaFecha && c.doctor_asignado === nuevoDoctor && c.estado === 'confirmada'
+  );
+  const tieneHorariosOcupados = citasOcupadasEnFecha.length > 0;
+
+  // Generador de Diálogo Dinámico al cambiar paciente / llamada
+  const initDynamicChat = (
+    cid: string,
+    pName: string,
+    hist: HistorialClinico | null,
+    isExisting: boolean
+  ) => {
+    const timeNow = new Date().toLocaleTimeString();
+    const doc = hist?.doctor_asignado || 'Dra. Mariana Fernández';
+    const firstName = pName.split(' ')[0] || 'Paciente';
+
+    if (!isExisting) {
+      setChatMessages([
+        {
+          role: 'system',
+          text: `Llamada entrante detectada en IVR Asterisk (Opción 4: Citas Médicas). CallerID: ${cid} (Paciente Nuevo).`,
+          time: timeNow
+        },
+        {
+          role: 'ai',
+          text: `¡Hola! Bienvenido al servicio clínico asistido por IA de ARM Salud. Detecto que es tu primera llamada desde el número ${cid}. ¿En qué podemos ayudarte el día de hoy o para qué especialidad deseas agendar tu consulta?`,
+          time: timeNow
+        },
+        {
+          role: 'patient',
+          text: 'Hola. Deseo agendar una consulta médica de valoración general por primera vez.',
+          time: timeNow
+        },
+        {
+          role: 'ai',
+          text: `¡Con mucho gusto! He abierto tu registro preliminar en el sistema. Disponemos de atención con la Dra. Mariana Gómez en Medicina General. ¿Qué fecha y horario prefieres?`,
+          time: timeNow
+        }
+      ]);
+    } else {
+      setChatMessages([
+        {
+          role: 'system',
+          text: `Llamada entrante detectada en IVR Asterisk (Opción 4: Citas Médicas). CallerID: ${cid} (${pName}) verificado en base de datos.`,
+          time: timeNow
+        },
+        {
+          role: 'ai',
+          text: `¡Hola, ${pName}! Bienvenido al servicio clínico asistido por IA de ARM Salud. Veo en tu expediente que tu última consulta fue el ${hist?.fecha_ultima_consulta || 'recientemente'} por ${hist?.ultimo_motivo || 'revisión médica'}. Tu médico de cabecera registrado es ${doc}. ¿En qué podemos ayudarte el día de hoy?`,
+          time: timeNow
+        },
+        {
+          role: 'patient',
+          text: `Hola, doctor IA. Requiero agendar una consulta médica de seguimiento con mi médico de cabecera, ${doc}.`,
+          time: timeNow
+        },
+        {
+          role: 'ai',
+          text: `Comprendo perfectamente, ${firstName}. Según tu diagnóstico previo ("${hist?.diagnostico_previo || 'monitoreo de salud'}"), tu recomendación preventiva activa es: "${hist?.sugerencia_preventiva_ia || 'Chequeo preventivo'}". Procedo a consultar la disponibilidad en tiempo real en la agenda de ${doc}...`,
+          time: timeNow
+        }
+      ]);
+    }
+  };
 
   // Cargar datos al cambiar de CallerID o filtros de vista
   useEffect(() => {
@@ -158,28 +221,36 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
       const data = await res.json();
       if (data.found && data.historial) {
         setIsExistingPatient(true);
-        setPatientName(data.historial.paciente_nombre || 'Paciente Registrado');
+        const resolvedName = data.historial.paciente_nombre || 'Paciente Registrado';
+        setPatientName(resolvedName);
         setClinicalHistory(data.historial);
-        setNuevoDoctor(data.historial.doctor_asignado || 'Dr. Alejandro Morales');
+        const resolvedDoc = data.historial.doctor_asignado || 'Dra. Mariana Fernández';
+        setNuevoDoctor(resolvedDoc);
+        initDynamicChat(cid, resolvedName, data.historial, true);
       } else if (data.cliente) {
         setIsExistingPatient(true);
-        setPatientName(data.cliente.nombre_completo || 'Cliente Registrado');
-        setClinicalHistory({
+        const resolvedName = data.cliente.nombre_completo || 'Cliente Registrado';
+        setPatientName(resolvedName);
+        const dummyHistory: HistorialClinico = {
           id: `hc-${cid}`,
           caller_id: cid,
-          paciente_nombre: data.cliente.nombre_completo,
+          paciente_nombre: resolvedName,
           fecha_ultima_consulta: '2026-08-15',
           ultimo_motivo: 'Consulta de Valoración General',
           diagnostico_previo: 'Estado clínico estable sin comorbilidades agudas',
           sugerencia_preventiva_ia: 'Paciente registrado sin alertas críticas. Programar chequeo preventivo anual.',
           doctor_asignado: 'Dra. Mariana Gómez'
-        });
+        };
+        setClinicalHistory(dummyHistory);
         setNuevoDoctor('Dra. Mariana Gómez');
+        initDynamicChat(cid, resolvedName, dummyHistory, true);
       } else {
         setIsExistingPatient(false);
-        setPatientName(`Paciente Nuevo (${cid})`);
+        const resolvedName = `Paciente Nuevo (${cid})`;
+        setPatientName(resolvedName);
         setClinicalHistory(null);
         setNuevoDoctor('Dra. Mariana Gómez');
+        initDynamicChat(cid, resolvedName, null, false);
       }
     } catch (err) {
       console.error('Error al consultar historial clínico:', err);
@@ -191,6 +262,14 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
   const fetchCitas = async (mode = agendaViewMode, cid = callerId, doc = selectedDoctorAgenda) => {
     setLoadingCitas(true);
     try {
+      // 1. Obtener todas las citas para cálculo preciso de disponibilidad (colores amarillo/rojo/verde)
+      const resAll = await fetch('/api/citas');
+      const dataAll = await resAll.json();
+      if (dataAll.citas) {
+        setTodasLasCitas(dataAll.citas);
+      }
+
+      // 2. Obtener citas filtradas para la lista de agenda en la columna derecha
       let url = '/api/citas';
       if (mode === 'paciente') {
         url = `/api/citas?caller_id=${encodeURIComponent(cid)}`;
@@ -218,6 +297,117 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
       }
     } catch (err) {
       console.error('Error al cargar casos CBR:', err);
+    }
+  };
+
+  // Enviar mensaje interactivo en el chat dinámico con Gemini IA
+  const handleSendChatMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputMessage.trim()) return;
+
+    const userText = inputMessage.trim();
+    const timeNow = new Date().toLocaleTimeString();
+
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        role: 'patient',
+        text: userText,
+        time: timeNow
+      }
+    ]);
+    setInputMessage('');
+
+    // Generar respuesta IA contextual y dinámica
+    setTimeout(() => {
+      const lower = userText.toLowerCase();
+      const pNameShort = patientName.split(' ')[0] || 'Estimado(a) paciente';
+      const timeResp = new Date().toLocaleTimeString();
+
+      let reply = '';
+
+      if (lower.includes('agendar') || lower.includes('cita') || lower.includes('horario') || lower.includes('fecha') || lower.includes('16') || lower.includes('17')) {
+        const isOcupado = todasLasCitas.some(
+          c => c.fecha === nuevaFecha &&
+               c.doctor_asignado === nuevoDoctor &&
+               c.estado === 'confirmada' &&
+               (c.hora === nuevaHora || c.hora.startsWith(nuevaHora))
+        );
+
+        if (isOcupado) {
+          reply = `Estimado(a) ${pNameShort}, he consultado la agenda y ${nuevoDoctor} ya cuenta con una cita confirmada el ${nuevaFecha} a las ${nuevaHora} hrs.\n\nDisponemos de dos alternativas:\n1) Reagendar al próximo día libre con su médico de cabecera (${proximaFechaCabecera} a las ${proximaHoraCabecera} hrs).\n2) Asignar esa misma fecha con un médico disponible (${selectedSubstituteDoctor}).`;
+          setConflictDetected(true);
+          setShowInteractiveChatChoices(true);
+        } else {
+          reply = `¡Excelente, ${pNameShort}! He verificado el calendario y el horario de las ${nuevaHora} hrs el día ${nuevaFecha} está 100% libre y disponible con ${nuevoDoctor}. Puedes hacer clic en "Confirmar Cita en Calendario" para asegurar tu lugar.`;
+        }
+      } else if (lower.includes('mareo') || lower.includes('presion') || lower.includes('presión') || lower.includes('dolor') || lower.includes('cabeza') || lower.includes('sintoma') || lower.includes('síntoma')) {
+        reply = `Tomo nota cuidadosa de tus síntomas ("${userText}"). De acuerdo con tu antecedente de "${clinicalHistory?.diagnostico_previo || 'revisión cardiovascular'}", te sugiero reposar, monitorear tu presión y no suspender medicamentos. He pre-cargado tu chequeo con ${medicoCabeceraActual} para que puedas formalizar tu cita.`;
+      } else if (lower.includes('gracias') || lower.includes('bien') || lower.includes('ok') || lower.includes('perfecto') || lower.includes('de acuerdo')) {
+        reply = `¡Con mucho gusto, ${pNameShort}! Tu bienestar es nuestra prioridad. Tu cita queda registrada y sincronizada en tiempo real tanto en el portal CRM como en el PBX Asterisk.`;
+      } else if (lower.includes('cabecera') || lower.includes('doctor') || lower.includes('doctora')) {
+        reply = `Tu médico de cabecera asignado es ${medicoCabeceraActual}. Si su horario estuviera ocupado, siempre podemos asignarte a otro médico especialista disponible para que no demores tu atención.`;
+      } else {
+        reply = `Comprendo tu solicitud, ${pNameShort}. Estoy coordinando con tu expediente clínico y la agenda de ${medicoCabeceraActual}. Por favor indícame la fecha u horario que prefieres agendar, o si requieres asistencia con algún síntoma.`;
+      }
+
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: 'ai',
+          text: reply,
+          time: timeResp
+        }
+      ]);
+    }, 400);
+  };
+
+  // Selección de Horario: Rojo (Ocupado) o Verde (Desocupado / Libre)
+  const handleSelectHorario = (hora: string, isOcupado: boolean, citaOcupada?: CitaMedica) => {
+    setNuevaHora(hora);
+    const pNameShort = patientName.split(' ')[0] || 'Estimado(a) paciente';
+
+    if (isOcupado) {
+      setConflictDetected(true);
+      setShowInteractiveChatChoices(true);
+      setProximaFechaCabecera('2026-11-17');
+      setProximaHoraCabecera('10:00');
+
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: 'patient',
+          text: `Deseo agendar mi cita para el ${nuevaFecha} a las ${hora} hrs con ${nuevoDoctor}.`,
+          time: new Date().toLocaleTimeString()
+        },
+        {
+          role: 'system',
+          text: `⚠️ Verificación en Calendario: ${nuevoDoctor} se encuentra OCUPADO(A) el ${nuevaFecha} a las ${hora} hrs (Cita con ${citaOcupada?.paciente_nombre || 'otro paciente'}).`,
+          time: new Date().toLocaleTimeString()
+        },
+        {
+          role: 'ai',
+          text: `Estimado(a) ${pNameShort}, el horario de las ${hora} hrs con ${nuevoDoctor} ya está reservado. ¿Qué prefieres?\n\n1) Reagendar al próximo día libre con tu médico de cabecera (${proximaFechaCabecera} a las ${proximaHoraCabecera} hrs).\n2) O mantener hoy la fecha (${nuevaFecha}) con un médico disponible de turno (${selectedSubstituteDoctor}).`,
+          time: new Date().toLocaleTimeString()
+        }
+      ]);
+    } else {
+      setConflictDetected(false);
+      setShowInteractiveChatChoices(false);
+
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: 'patient',
+          text: `Seleccioné el horario disponible de las ${hora} hrs para el ${nuevaFecha} con ${nuevoDoctor}.`,
+          time: new Date().toLocaleTimeString()
+        },
+        {
+          role: 'ai',
+          text: `¡Perfecto, ${pNameShort}! El horario de las ${hora} hrs está totalmente libre con ${nuevoDoctor}. Presiona "Confirmar Cita en Calendario" para agendar.`,
+          time: new Date().toLocaleTimeString()
+        }
+      ]);
     }
   };
 
@@ -269,21 +459,23 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
     setProximaFechaCabecera(proximaFecha);
     setProximaHoraCabecera(proximaHora);
 
+    const pNameShort = patientName.split(' ')[0] || 'Estimado(a) paciente';
+
     setChatMessages(prev => [
       ...prev,
       {
         role: 'patient',
-        text: `Deseo agendar mi cita para el 16 de Noviembre a las 10:00 hrs con mi doctora de cabecera, la ${medicoCabeceraActual}.`,
+        text: `Deseo agendar mi cita para el ${nuevaFecha} a las 10:00 hrs con mi médico de cabecera, ${medicoCabeceraActual}.`,
         time: new Date().toLocaleTimeString()
       },
       {
         role: 'system',
-        text: `⚠️ Verificación en Calendario: La ${medicoCabeceraActual} se encuentra OCUPADA el 2026-11-16 a las 10:00 hrs.`,
+        text: `⚠️ Verificación en Calendario: ${medicoCabeceraActual} se encuentra OCUPADA el ${nuevaFecha} a las 10:00 hrs.`,
         time: new Date().toLocaleTimeString()
       },
       {
         role: 'ai',
-        text: `Estimado Carlos, he consultado la agenda y la ${medicoCabeceraActual} ya cuenta con una cita médica confirmada el 16 de Noviembre a las 10:00 hrs. Disponemos de las siguientes dos alternativas:\n\n1) Atenderse hoy mismo con el Dr. Fernando Fernández a las 11:00 hrs.\n2) O agendar con su doctora de cabecera ${medicoCabeceraActual} para el día siguiente (Martes 17 de Noviembre a las 10:00 hrs).`,
+        text: `Estimado(a) ${pNameShort}, he consultado la agenda y ${medicoCabeceraActual} ya cuenta con una cita confirmada el ${nuevaFecha} a las 10:00 hrs. Disponemos de las siguientes dos alternativas:\n\n1) Atenderse hoy mismo con el Dr. Fernando Fernández a las 11:00 hrs.\n2) O agendar con su médico de cabecera ${medicoCabeceraActual} para el día siguiente (Martes 17 de Noviembre a las 10:00 hrs).`,
         time: new Date().toLocaleTimeString()
       }
     ]);
@@ -292,16 +484,17 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
   // Opción A: Reagendar con Médico de Cabecera en su próximo día libre (Día siguiente)
   const handleElegirReagendarCabecera = async () => {
     setShowInteractiveChatChoices(false);
+    const pNameShort = patientName.split(' ')[0] || 'Estimado(a) paciente';
     setChatMessages(prev => [
       ...prev,
       {
         role: 'patient',
-        text: `Prefiero agendar para el día siguiente con mi doctora de cabecera (${medicoCabeceraActual}).`,
+        text: `Prefiero agendar para el día siguiente con mi médico de cabecera (${medicoCabeceraActual}).`,
         time: new Date().toLocaleTimeString()
       },
       {
         role: 'ai',
-        text: `¡Excelente elección, Carlos! Cuidamos la continuidad de su tratamiento. He confirmado su cita con su doctora de cabecera, la ${medicoCabeceraActual}, para el Martes 17 de Noviembre a las 10:00 hrs. Recuerde acudir en ayuno de 8 horas para su check-up de sangre.`,
+        text: `¡Excelente elección, ${pNameShort}! Cuidamos la continuidad de su tratamiento. He confirmado su cita con su médico de cabecera, ${medicoCabeceraActual}, para el Martes 17 de Noviembre a las 10:00 hrs. Recuerde acudir en ayuno si requiere check-up de sangre.`,
         time: new Date().toLocaleTimeString()
       }
     ]);
@@ -310,7 +503,7 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
       fecha: '2026-11-17',
       hora: '10:00',
       doctor_asignado: medicoCabeceraActual,
-      motivo: `Check-up de sangre preventivo agendado con doctora de cabecera (${medicoCabeceraActual}) para el día siguiente`
+      motivo: `Check-up preventivo agendado con médico de cabecera (${medicoCabeceraActual}) para el día siguiente`
     });
   };
 
@@ -319,6 +512,7 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
     const doc = doctorNombre || 'Dr. Fernando Fernández';
     const docObj = PLANTILLA_MEDICOS.find(m => m.nombre === doc);
     const esp = docObj?.especialidad || 'Medicina Interna y Cardiología';
+    const pNameShort = patientName.split(' ')[0] || 'Estimado(a) paciente';
 
     setShowInteractiveChatChoices(false);
     setChatMessages(prev => [
@@ -750,35 +944,161 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
               </div>
             )}
 
-            <form onSubmit={(e) => handleAgendarCita(e)} className="space-y-3 text-xs">
+            <form onSubmit={(e) => handleAgendarCita(e)} className="space-y-3.5 text-xs">
+              {/* Selector de Fecha con Indicador Amarillo para Horarios Ocupados */}
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">Fecha de la Cita:</label>
-                <input
-                  type="date"
-                  value={nuevaFecha}
-                  onChange={(e) => setNuevaFecha(e.target.value)}
-                  required
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 font-mono"
-                />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-slate-700 font-bold">Fecha de la Cita:</label>
+                  {tieneHorariosOcupados ? (
+                    <span className="text-[10px] font-extrabold text-amber-900 bg-amber-200/90 border border-amber-400 px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs animate-pulse">
+                      🟡 Horarios Ocupados ({citasOcupadasEnFecha.length})
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      🟢 100% Disponible
+                    </span>
+                  )}
+                </div>
+
+                <div className={`p-2.5 rounded-xl border-2 transition-all ${
+                  tieneHorariosOcupados 
+                    ? 'bg-amber-50/90 border-amber-400 ring-2 ring-amber-300/60 shadow-xs' 
+                    : 'bg-emerald-50/40 border-emerald-300'
+                }`}>
+                  <input
+                    type="date"
+                    value={nuevaFecha}
+                    onChange={(e) => setNuevaFecha(e.target.value)}
+                    required
+                    className={`w-full p-2 rounded-lg font-mono text-xs font-bold focus:outline-none transition ${
+                      tieneHorariosOcupados
+                        ? 'bg-amber-100/80 border border-amber-300 text-amber-950 focus:ring-2 focus:ring-amber-500'
+                        : 'bg-white border border-slate-200 text-slate-800 focus:ring-2 focus:ring-teal-500'
+                    }`}
+                  />
+
+                  {tieneHorariosOcupados ? (
+                    <div className="mt-1.5 p-1.5 bg-amber-100/90 rounded-lg text-[10px] text-amber-950 font-semibold flex items-center gap-1.5 border border-amber-300/80">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>
+                        <strong>Atención:</strong> {nuevoDoctor} tiene <strong>{citasOcupadasEnFecha.length} horario(s) ocupado(s)</strong> el {nuevaFecha} ({citasOcupadasEnFecha.map(c => c.hora.substring(0, 5)).join(', ')}).
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-1.5 p-1.5 bg-emerald-100/70 rounded-lg text-[10px] text-emerald-900 font-semibold flex items-center gap-1.5 border border-emerald-200">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>Todos los horarios disponibles para {nuevoDoctor} el {nuevaFecha}.</span>
+                    </div>
+                  )}
+
+                  {/* Botones de fechas rápidas para alternar entre fechas ocupadas y libres */}
+                  <div className="flex items-center gap-1.5 pt-2 mt-1.5 border-t border-slate-200/70">
+                    <span className="text-[10px] text-slate-500 font-bold shrink-0">Fechas:</span>
+                    <div className="flex gap-1 overflow-x-auto w-full pb-0.5">
+                      {[
+                        { f: '2026-11-16', label: '16 Nov' },
+                        { f: '2026-11-17', label: '17 Nov' },
+                        { f: '2026-11-18', label: '18 Nov' },
+                        { f: '2026-11-20', label: '20 Nov' }
+                      ].map(d => {
+                        const hasBusy = todasLasCitas.some(c => c.fecha === d.f && c.doctor_asignado === nuevoDoctor && c.estado === 'confirmada');
+                        return (
+                          <button
+                            key={d.f}
+                            type="button"
+                            onClick={() => setNuevaFecha(d.f)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono transition flex items-center gap-1 shrink-0 ${
+                              nuevaFecha === d.f
+                                ? 'ring-2 ring-teal-600 shadow-xs'
+                                : 'opacity-85 hover:opacity-100'
+                            } ${
+                              hasBusy
+                                ? 'bg-amber-200 text-amber-950 border border-amber-400'
+                                : 'bg-slate-200 text-slate-700 border border-slate-300'
+                            }`}
+                          >
+                            <span>{hasBusy ? '🟡' : '🟢'}</span>
+                            <span>{d.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
               </div>
 
+              {/* Selector de Horarios con Rojo (Ocupado) y Verde (Desocupado) */}
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">Horario Solicitado:</label>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {['09:00', '10:30', '12:00', '15:30', '17:00', '18:15'].map((h) => (
-                    <button
-                      key={h}
-                      type="button"
-                      onClick={() => setNuevaHora(h)}
-                      className={`py-1.5 px-2 rounded-lg font-mono text-center font-bold transition ${
-                        nuevaHora === h 
-                          ? 'bg-teal-600 text-white shadow-xs' 
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      }`}
-                    >
-                      {h}
-                    </button>
-                  ))}
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-slate-700 font-bold">
+                    Horario de Atención ({nuevaHora} hrs):
+                  </label>
+                  <span className="text-[10px] font-mono font-bold text-slate-500 truncate max-w-[150px]">
+                    {nuevoDoctor}
+                  </span>
+                </div>
+
+                {/* Leyenda Visual de Colores Solicitada */}
+                <div className="flex items-center justify-between gap-1 text-[10px] font-bold p-1.5 mb-2 bg-slate-100 rounded-lg border border-slate-200 text-slate-700">
+                  <span className="flex items-center gap-1 text-red-700">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-600 inline-block" /> Rojo: Ocupado
+                  </span>
+                  <span className="flex items-center gap-1 text-emerald-700">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 inline-block" /> Verde: Desocupado
+                  </span>
+                  <span className="flex items-center gap-1 text-amber-700">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" /> Amarillo: Fecha
+                  </span>
+                </div>
+
+                {/* Grid de Horarios Rojo/Verde */}
+                <div className="grid grid-cols-3 gap-1.5 max-h-[195px] overflow-y-auto pr-1">
+                  {HORARIOS_CLINICA.map((h) => {
+                    const citaOcupada = todasLasCitas.find(
+                      c => c.fecha === nuevaFecha &&
+                           c.doctor_asignado === nuevoDoctor &&
+                           c.estado === 'confirmada' &&
+                           (c.hora === h || c.hora.startsWith(h) || h.startsWith(c.hora.substring(0, 5)))
+                    );
+                    const isOcupado = !!citaOcupada;
+                    const isSelected = nuevaHora === h;
+
+                    return (
+                      <button
+                        key={h}
+                        type="button"
+                        onClick={() => handleSelectHorario(h, isOcupado, citaOcupada)}
+                        className={`py-1.5 px-2 rounded-xl font-mono text-center font-bold text-xs transition relative border-2 ${
+                          isOcupado
+                            ? isSelected
+                              ? 'bg-red-600 text-white border-red-700 ring-2 ring-red-400 shadow-md scale-[1.02]'
+                              : 'bg-red-50 text-red-800 border-red-400 hover:bg-red-100 ring-1 ring-red-200'
+                            : isSelected
+                            ? 'bg-emerald-600 text-white border-emerald-700 ring-2 ring-emerald-400 shadow-md scale-[1.02]'
+                            : 'bg-emerald-50 text-emerald-800 border-emerald-400 hover:bg-emerald-100'
+                        }`}
+                        title={
+                          isOcupado 
+                            ? `Ocupado: ${citaOcupada?.paciente_nombre || 'Cita confirmada'}` 
+                            : `Horario Disponible con ${nuevoDoctor}`
+                        }
+                      >
+                        <div className="flex items-center justify-center gap-1">
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              isOcupado ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'
+                            }`}
+                          />
+                          <span>{h}</span>
+                        </div>
+                        <span className={`text-[9px] block uppercase font-extrabold tracking-tight ${
+                          isSelected ? 'text-white' : isOcupado ? 'text-red-700' : 'text-emerald-700'
+                        }`}>
+                          {isOcupado ? 'Ocupado 🔴' : 'Libre 🟢'}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -844,7 +1164,7 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
 
         {/* Columna 2: Simulador Conversacional Opción 4 Gemini IA (4 Cols) */}
         <div className="lg:col-span-4 space-y-6">
-          <div className="bg-slate-950 text-slate-100 rounded-2xl border border-slate-800 shadow-2xl p-5 space-y-4 flex flex-col h-[780px]">
+          <div className="bg-slate-950 text-slate-100 rounded-2xl border border-slate-800 shadow-2xl p-5 space-y-3.5 flex flex-col h-[880px]">
             {/* Header del Simulador */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
@@ -862,9 +1182,20 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
                 </div>
               </div>
 
-              <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono">
-                CallerID: {callerId}
-              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => initDynamicChat(callerId, patientName, clinicalHistory, isExistingPatient)}
+                  className="text-[10px] bg-slate-800 hover:bg-slate-700 text-teal-300 px-2 py-0.5 rounded font-medium border border-slate-700 flex items-center gap-1 transition"
+                  title="Reiniciar diálogo con el paciente actual simulando entrada de llamada IVR"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Reiniciar Diálogo</span>
+                </button>
+                <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono">
+                  CallerID: {callerId}
+                </span>
+              </div>
             </div>
 
             {/* Flujo de Diálogo en Tiempo Real */}
@@ -923,42 +1254,61 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
                   <div className="space-y-1.5">
                     <button
                       type="button"
+                      onClick={() => handleElegirMantenerHorarioSustituto('Dr. Fernando Fernández')}
+                      className="w-full text-left p-2.5 bg-blue-950/80 hover:bg-blue-900/80 border border-blue-500/40 rounded-xl text-blue-200 text-xs font-semibold flex items-center justify-between transition active:scale-95 group"
+                    >
+                      <div className="space-y-0.5">
+                        <span className="block font-bold text-white group-hover:text-blue-300">
+                          1. Atenderse Hoy con Médico de Turno (DTMF 1 en IVR)
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          Hoy Lunes 16 de Noviembre, 11:00 AM con Dr. Fernando Fernández
+                        </span>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-blue-400 shrink-0" />
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={handleElegirReagendarCabecera}
                       className="w-full text-left p-2.5 bg-teal-950/80 hover:bg-teal-900/80 border border-teal-500/40 rounded-xl text-teal-200 text-xs font-semibold flex items-center justify-between transition active:scale-95 group"
                     >
                       <div className="space-y-0.5">
                         <span className="block font-bold text-white group-hover:text-teal-300">
-                          1. Reagendar con Médico de Cabecera
+                          2. Agendar con Médica de Cabecera al Día Siguiente (DTMF 2 en IVR)
                         </span>
                         <span className="text-[10px] text-slate-400">
-                          Próximo día disponible: Lunes 23 de Noviembre, 11:30 AM ({medicoCabeceraActual})
+                          Mañana Martes 17 de Noviembre, 10:00 AM con {medicoCabeceraActual}
                         </span>
                       </div>
                       <ArrowRight className="w-4 h-4 text-teal-400 shrink-0" />
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleElegirMantenerHorarioSustituto('Dra. Elena Patricia Castillo')}
-                      className="w-full text-left p-2.5 bg-blue-950/80 hover:bg-blue-900/80 border border-blue-500/40 rounded-xl text-blue-200 text-xs font-semibold flex items-center justify-between transition active:scale-95 group"
-                    >
-                      <div className="space-y-0.5">
-                        <span className="block font-bold text-white group-hover:text-blue-300">
-                          2. Mantener Fecha Solicitada con Médico Disponible
-                        </span>
-                        <span className="text-[10px] text-slate-400">
-                          Viernes 20 de Noviembre, 10:30 AM con Dra. Elena Patricia Castillo
-                        </span>
-                      </div>
-                      <ArrowRight className="w-4 h-4 text-blue-400 shrink-0" />
                     </button>
                   </div>
                 </div>
               )}
             </div>
 
+            {/* Input interactivo para conversación en tiempo real con el Agente Clínico */}
+            <form onSubmit={handleSendChatMessage} className="p-2 bg-slate-900 border border-slate-800 rounded-xl flex items-center gap-2">
+              <input
+                type="text"
+                value={inputMessage}
+                onChange={(e) => setInputMessage(e.target.value)}
+                placeholder={`Escribir como ${patientName.split(' ')[0]} o consultar a la IA...`}
+                className="flex-1 bg-slate-950 border border-slate-700 text-white px-3 py-1.5 rounded-lg text-xs focus:outline-none focus:border-teal-400 placeholder:text-slate-500"
+              />
+              <button
+                type="submit"
+                disabled={!inputMessage.trim()}
+                className="px-3 py-1.5 bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white font-bold text-xs rounded-lg transition active:scale-95 flex items-center gap-1 shadow-sm shrink-0"
+              >
+                <span>Enviar</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </form>
+
             {/* Controles de Simulación de Diálogo */}
-            <div className="pt-3 border-t border-slate-800 space-y-2">
+            <div className="pt-2 border-t border-slate-800 space-y-2">
               <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">
                 Simular Escenarios del Flujo Clínico:
               </span>

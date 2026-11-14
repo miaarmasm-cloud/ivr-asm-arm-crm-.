@@ -13,7 +13,7 @@ ASTERISK 20 AGI: AGENTE CLÍNICO INTELIGENTE (GEMINI 1.5 + CBR + GOOGLE CALENDAR
    - Si está OCUPADO:
      * Informa al paciente que su doctor de cabecera ya está ocupado en esa hora.
      * Ofrece el siguiente horario disponible con su doctor de cabecera (ej. 15:00 hrs).
-     * O le asigna los médicos disponibles de turno ese mismo día (Dr. Fernando Castillo / Dra. Sofía Navarro).
+     * O le asigna los médicos disponibles de turno ese mismo día (Dr. Fernando Fernández / Dra. Sofía Navarro).
    - Si está DISPONIBLE:
      * Confirma el horario con su doctor de cabecera.
 4. Sincronización en vivo bidireccional:
@@ -207,6 +207,16 @@ def eliminar_evento_google_calendar(google_event_id):
 # LÓGICA DE NEGOCIO: DOCTOR DE CABECERA Y DISPONIBILIDAD
 # =============================================================================
 
+def formatear_fecha_es(fecha_iso):
+    """Convierte fecha YYYY-MM-DD en texto natural en español para voz TTS (ej. lunes 16 de noviembre)."""
+    try:
+        d = datetime.date.fromisoformat(str(fecha_iso)[:10])
+        dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+        meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+        return f"{dias[d.weekday()]} {d.day} de {meses[d.month - 1]}"
+    except Exception:
+        return str(fecha_iso)
+
 def calcular_siguiente_dia_laboral():
     hoy = datetime.date.today()
     siguiente = hoy + datetime.timedelta(days=1)
@@ -324,10 +334,14 @@ def main():
 
     texto_audio = f"Hola {primer_nombre}, bienvenido a su asistente médico inteligente con inteligencia artificial Gemini. {resumen_clinico} "
 
+    fecha_obj_txt = formatear_fecha_es(fecha_objetivo)
+    fecha_sig_txt = formatear_fecha_es(fecha_dia_siguiente)
+
     if cita_activa:
+        fecha_activa_txt = formatear_fecha_es(cita_activa.get('fecha'))
         # El paciente ya tiene una cita agendada
         texto_audio += (
-            f"Actualmente usted cuenta con una cita confirmada para el día {cita_activa.get('fecha')} "
+            f"Actualmente usted cuenta con una cita confirmada para el día {fecha_activa_txt} "
             f"a las {str(cita_activa.get('hora'))[:5]} horas con {cita_activa.get('doctor_asignado')}. "
             f"Presione 1 para confirmar su asistencia. "
             f"Presione 2 para reprogramarla a otro horario disponible. "
@@ -338,17 +352,17 @@ def main():
     elif doctor_ocupado:
         # Escenario Homologado: Doctora de Cabecera OCUPADA en la fecha indicada
         texto_audio += (
-            f"Le informamos que su doctora de cabecera, la {doctor_cabecera}, se encuentra ocupada el día de hoy, {fecha_objetivo}, a las {hora_preferente} horas. "
+            f"Le informamos que su doctora de cabecera, la {doctor_cabecera}, se encuentra ocupada el {fecha_obj_txt} a las {hora_preferente} horas. "
             f"Sin embargo, tenemos las siguientes opciones para usted: "
-            f"Presione 1 si desea ser atendido hoy mismo con el {medico_turno} a las {hora_turno} horas. "
-            f"O presione 2 para agendar con su doctora de cabecera {doctor_cabecera} para el día siguiente, {fecha_dia_siguiente}, a las {hora_preferente} horas. "
+            f"Presione 1 si desea ser atendido ese mismo día con el {medico_turno} a las {hora_turno} horas. "
+            f"O presione 2 para agendar con su doctora de cabecera {doctor_cabecera} para el día siguiente, {fecha_sig_txt}, a las {hora_preferente} horas. "
             f"O presione 0 para transferir con un asesor médico."
         )
         escape_chars = "120"
     else:
         # La doctora de cabecera ESTÁ DISPONIBLE a las 10:00
         texto_audio += (
-            f"Su doctora de cabecera, la {doctor_cabecera}, se encuentra disponible en nuestro calendario para el día {fecha_objetivo} a las {hora_preferente} horas. "
+            f"Su doctora de cabecera, la {doctor_cabecera}, se encuentra disponible en nuestro calendario para el día {fecha_obj_txt} a las {hora_preferente} horas. "
             f"Presione 1 para confirmar y agendar su cita con la {doctor_cabecera}. "
             f"Presione 2 para consultar otros médicos u horarios de la clínica. "
             f"O presione 0 para hablar con un especialista humano."
@@ -385,7 +399,7 @@ def main():
             doctor_final = medico_turno
             especialidad_final = "Medicina Interna y Cardiología"
             mensaje_exito = (
-                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el día de hoy, {fecha_final} a las {hora_final} horas "
+                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el {formatear_fecha_es(fecha_final)} a las {hora_final} horas "
                 f"con el {doctor_final}. Su horario ha quedado reservado en el calendario."
             )
         else:
@@ -394,7 +408,7 @@ def main():
             doctor_final = doctor_cabecera
             especialidad_final = "Medicina Familiar y Preventiva"
             mensaje_exito = (
-                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el día {fecha_final} a las {hora_final} horas "
+                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el {formatear_fecha_es(fecha_final)} a las {hora_final} horas "
                 f"con su doctora de cabecera {doctor_final}. Le recordamos acudir en ayuno de 8 horas para su check-up de sangre."
             )
 
@@ -487,7 +501,7 @@ def main():
             })
 
             mensaje_sig = (
-                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el día de mañana, {fecha_final} a las {hora_final} horas "
+                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el {formatear_fecha_es(fecha_final)} a las {hora_final} horas "
                 f"con su doctora de cabecera {doctor_final}. Le recordamos acudir en ayuno de 8 horas para su check-up de sangre. Muchas gracias por cuidar su salud con nosotros."
             )
             hablar(mensaje_sig)
