@@ -11,7 +11,12 @@ ASTERISK 20 AGI: IDENTIFICADOR DE LLAMANTE (LEAD CONOCIDO VS NUEVO)
 4. Si es un nuevo lead / desconocido:
    - Saludo genérico: "Bienvenido a nuestro sistema inteligente..."
    - Exporta variables: ES_CLIENTE=0.
-5. Sintetiza con ElevenLabs (o fallback de alta calidad) y reproduce el audio.
+5. Menú de 4 opciones:
+   - 1: Saldo
+   - 2: Cancelación
+   - 3: Ventas
+   - 4: Citas médicas y agenda preventiva
+6. Soporte de interrupción inmediata (Barge-in con dígitos 1234).
 =============================================================================
 """
 
@@ -164,7 +169,8 @@ def main():
             f"Hola {primer_nombre}, bienvenido a tu sistema inteligente ARM. "
             f"Marque 1 para consultar su saldo. "
             f"Marque 2 para cancelación. "
-            f"Marque 3 para comunicarse con una ejecutiva de ventas."
+            f"Marque 3 para comunicarse con una ejecutiva de ventas. "
+            f"O marque 4 para agendar o consultar sus citas médicas."
         )
     else:
         # Lead nuevo o caller_id no registrado en la base
@@ -175,20 +181,21 @@ def main():
             "Bienvenido al sistema inteligente de atención a clientes. "
             "Marque 1 para consultar su saldo. "
             "Marque 2 para cancelación. "
-            "Marque 3 para comunicarse con una ejecutiva de ventas."
+            "Marque 3 para comunicarse con una ejecutiva de ventas. "
+            "O marque 4 para agendar o consultar sus citas médicas."
         )
 
     sintetizar_voz(texto_saludo, audio_path)
 
     res = ""
     if os.path.exists(audio_path):
-        res = agi_cmd(f'STREAM FILE "{audio_base}" "123"')
+        res = agi_cmd(f'STREAM FILE "{audio_base}" "1234"')
         try:
             os.remove(audio_path)
         except Exception:
             pass
     else:
-        res = agi_cmd('STREAM FILE "ivr-bienvenida-menu" "123"')
+        res = agi_cmd('STREAM FILE "ivr-bienvenida-menu" "1234"')
 
     # Soporte completo de Barge-in (Interrupción anticipada por DTMF)
     if "result=49" in res:
@@ -202,6 +209,10 @@ def main():
     elif "result=51" in res:
         # Pulsó '3' durante la bienvenida
         agi_cmd('SET EXTENSION 3')
+        agi_cmd('SET PRIORITY 1')
+    elif "result=52" in res:
+        # Pulsó '4' durante la bienvenida
+        agi_cmd('SET EXTENSION 4')
         agi_cmd('SET PRIORITY 1')
 
 if __name__ == "__main__":
