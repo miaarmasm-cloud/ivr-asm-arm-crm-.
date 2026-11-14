@@ -42,6 +42,9 @@ livekit-records/
 credenciales/
 mcp-server/mcp_config.json
 .agents/plugins/**/mcp_config.json
+*credentials*.json
+*token*.json
+google_*.json
 *.txt
 *.pem
 *.key
