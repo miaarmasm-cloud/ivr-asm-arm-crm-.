@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "servidor-mcp-arm-asm": {
+      "command": "python",
+      "args": ["mcp-server/servidor_mcp_arm.py"],
+      "env": {
+        "SUPABASE_URL": "https://xlmrmdxtrdomtrmnczwh.supabase.co",
+        "GITHUB_REPO": "miaarmasm-cloud/ivr-asm-arm-crm-."
+      }
+    }
+  }
+}
