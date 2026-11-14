@@ -1,0 +1,22 @@
+# =========================================================================
+# DOCKERFILE - AGENTE ARM LIVEKIT (VOZ ELEVENLABS, DTMF & CBR)
+# =========================================================================
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY livekit-agent/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Descarga previa del modelo de detección de voz Silero VAD
+RUN python -c "from livekit.plugins import silero; silero.VAD.load()"
+
+COPY livekit-agent/ .
+
+CMD ["python", "agent.py", "start"]

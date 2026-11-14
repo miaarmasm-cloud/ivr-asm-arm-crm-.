@@ -1,0 +1,59 @@
+# =========================================================================
+# DESPLIEGUE EN KUBERNETES - CRM / ARM FRONTEND (NEXT.JS)
+# =========================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crm-frontend-deployment
+  namespace: default
+  labels:
+    app: crm-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crm-frontend
+  template:
+    metadata:
+      labels:
+        app: crm-frontend
+    spec:
+      containers:
+        - name: crm-frontend
+          image: ghcr.io/miaarmasm-cloud/crm-arm-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http-port
+              containerPort: 3000
+          env:
+            - name: NEXT_PUBLIC_SUPABASE_URL
+              value: "https://xlmrmdxtrdomtrmnczwh.supabase.co"
+            - name: PORT
+              value: "3000"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+# =========================================================================
+# SERVICIO ENDPOINT KUBERNETES - EXPONE EL CRM PARA ACCESO WEB
+# =========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: crm-frontend-service
+  namespace: default
+  labels:
+    app: crm-frontend
+spec:
+  type: NodePort # Permite acceso web inmediato en KodeKloud y clusters locales
+  selector:
+    app: crm-frontend
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      nodePort: 30080 # Puerto accesible desde el navegador en el nodo K8s

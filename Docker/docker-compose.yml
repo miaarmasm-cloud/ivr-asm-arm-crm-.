@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  # 1. CRM ARM Frontend (Next.js)
+  crm-frontend:
+    build:
+      context: ..
+      dockerfile: Docker/Dockerfile.frontend
+    container_name: crm-arm-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_SUPABASE_URL=https://xlmrmdxtrdomtrmnczwh.supabase.co
+      - PORT=3000
+    restart: unless-stopped
+
+  # 2. Servidor MCP para Supabase
+  mcp-server:
+    build:
+      context: ..
+      dockerfile: Docker/Dockerfile.mcp-server
+    container_name: mcp-supabase-server
+    ports:
+      - "8000:8000"
+    environment:
+      - SUPABASE_URL=https://xlmrmdxtrdomtrmnczwh.supabase.co
+    restart: unless-stopped
+
+  # 3. LiveKit Server (WebRTC)
+  livekit-server:
+    image: livekit/livekit-server:latest
+    container_name: livekit-server
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+    restart: unless-stopped

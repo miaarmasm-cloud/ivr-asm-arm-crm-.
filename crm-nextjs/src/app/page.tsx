@@ -169,6 +169,29 @@ export default function CRMPage() {
     setCallLogs(prev => [newLog, ...prev]);
   };
 
+  const handleDirectOutboundCall = async (phone: string) => {
+    setActiveDialNumber(phone);
+    try {
+      await fetch('/api/outbound', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ destination: phone, agentExtension: '2001' })
+      });
+    } catch (err) {
+      console.error('Error originando llamada:', err);
+    }
+    const newLog: CallLog = {
+      id: `log-${Date.now()}`,
+      caller_id: phone,
+      cliente_id: activeCustomer?.id,
+      tipo: 'saliente',
+      duracion_segundos: 0,
+      notas_agente: `Llamada saliente iniciada desde botón Outbound hacia CallerID: ${phone}`,
+      fecha_hora: new Date().toISOString()
+    };
+    setCallLogs(prev => [newLog, ...prev]);
+  };
+
   const handleNotifyCustomer = (orderId: string) => {
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, notificado_al_cliente: true } : o));
     if (activeCustomer) {
@@ -309,7 +332,7 @@ export default function CRMPage() {
               <CustomerProfile
                 customer={activeCustomer}
                 onSaveCustomer={handleSaveCustomer}
-                onCallNumber={(phone) => setActiveDialNumber(phone)}
+                onCallNumber={handleDirectOutboundCall}
               />
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
