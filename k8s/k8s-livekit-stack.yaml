@@ -181,3 +181,54 @@ spec:
                 secretKeyRef:
                   name: ai-credentials
                   key: supabase-key
+---
+# 5. Despliegue del Servidor MCP para Supabase en Kubernetes
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-supabase-server
+  namespace: ivr-arm-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-supabase-server
+  template:
+    metadata:
+      labels:
+        app: mcp-supabase-server
+    spec:
+      containers:
+        - name: mcp-server
+          image: ghcr.io/miaarmasm-cloud/mcp-supabase-server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: mcp-http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: SUPABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ai-credentials
+                  key: supabase-url
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-credentials
+                  key: supabase-key
+---
+# Servicio Interno para el Servidor MCP en el Cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-supabase-service
+  namespace: ivr-arm-system
+spec:
+  selector:
+    app: mcp-supabase-server
+  ports:
+    - name: mcp-port
+      port: 8000
+      targetPort: 8000
+      protocol: TCP

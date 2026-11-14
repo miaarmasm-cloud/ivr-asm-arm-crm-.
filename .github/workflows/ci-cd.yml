@@ -9,6 +9,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME_AGENT: ${{ github.repository }}/livekit-arm-agent
   IMAGE_NAME_CRM: ${{ github.repository }}/crm-arm-frontend
+  IMAGE_NAME_MCP: ${{ github.repository }}/mcp-supabase-server
 
 jobs:
   build-and-push:
@@ -43,6 +44,14 @@ jobs:
           context: ./crm-nextjs
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_CRM }}:latest
+
+      # 3. Empaquetar y publicar Contenedor del Servidor MCP Supabase
+      - name: Build and Push MCP Server Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./mcp-server
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MCP }}:latest
 
       - name: Notification
         run: echo "Contenedores Docker empaquetados y publicados en GHCR exitosamente."
