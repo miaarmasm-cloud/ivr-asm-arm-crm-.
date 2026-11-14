@@ -94,6 +94,36 @@ export default function CRMPage() {
 
   const activeCustomer = customers.find(c => c.id === selectedCustomerId) || null;
 
+  // Cargar clientes y bitácora desde Supabase al iniciar
+  useEffect(() => {
+    async function loadInitialData() {
+      if (isSupabaseConfigured()) {
+        try {
+          const { data: dbCustomers } = await supabase
+            .from('clientes')
+            .select('*')
+            .order('caller_id', { ascending: true });
+          if (dbCustomers && dbCustomers.length > 0) {
+            setCustomers(dbCustomers);
+            setSelectedCustomerId(dbCustomers[0].id);
+          }
+
+          const { data: dbLogs } = await supabase
+            .from('llamadas_bitacora')
+            .select('*')
+            .order('fecha_hora', { ascending: false })
+            .limit(20);
+          if (dbLogs && dbLogs.length > 0) {
+            setCallLogs(dbLogs);
+          }
+        } catch (e) {
+          console.error('Error cargando datos de Supabase:', e);
+        }
+      }
+    }
+    loadInitialData();
+  }, []);
+
   // Escuchar eventos en tiempo real de Supabase si está configurado
   useEffect(() => {
     if (isSupabaseConfigured()) {
