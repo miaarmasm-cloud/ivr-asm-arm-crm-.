@@ -37,6 +37,11 @@ wheels/
 *.log
 livekit-records/
 
-# OS
-.DS_Store
-Thumbs.db
+# Credentials & Secrets (Local only, never push to git)
+credenciales/
+*.txt
+*.pem
+*.key
+.env
+.env.local
+.env.production
