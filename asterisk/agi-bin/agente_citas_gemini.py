@@ -55,8 +55,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN_FILE = os.path.join(BASE_DIR, 'google_token.json')
 
 PLANTILLA_MEDICOS = [
-    {"nombre": "Dra. Mariana Gómez", "especialidad": "Medicina General y Preventiva"},
-    {"nombre": "Dr. Fernando Castillo", "especialidad": "Medicina Interna y Cardiología"},
+    {"nombre": "Dra. Mariana Fernández", "especialidad": "Medicina Familiar y Preventiva"},
+    {"nombre": "Dr. Fernando Fernández", "especialidad": "Medicina Interna y Cardiología"},
     {"nombre": "Dra. Sofía Navarro", "especialidad": "Laboratorio y Diagnóstico Clínico"}
 ]
 
@@ -216,8 +216,9 @@ def calcular_siguiente_dia_laboral():
     return siguiente.isoformat()
 
 def verificar_disponibilidad_doctor(doctor_nombre, fecha, hora):
-    """Verifica si el médico específico está ocupado en la fecha y hora seleccionada."""
-    query = f"citas_calendario?doctor_asignado=eq.{urllib.parse.quote(doctor_nombre)}&fecha=eq.{fecha}&hora=eq.{hora}:00&estado=in.(confirmada,reprogramada)&select=id"
+    """Verifica si el médico específico está ocupado en la fecha y hora seleccionada (soporta HH:MM y HH:MM:SS)."""
+    hora_norm = str(hora)[:5]
+    query = f"citas_calendario?doctor_asignado=eq.{urllib.parse.quote(doctor_nombre)}&fecha=eq.{fecha}&hora=in.({hora_norm},{hora_norm}:00)&estado=in.(confirmada,reprogramada)&select=id"
     res = http_get(query)
     return len(res) > 0  # True si está ocupado
 
@@ -232,8 +233,9 @@ def buscar_proximo_horario_libre_doctor(doctor_nombre, fecha):
     return "15:00"
 
 def buscar_medicos_disponibles_en_horario(fecha, hora, excluir_doctor=""):
-    """Encuentra médicos alternativos disponibles en esa misma fecha y hora."""
-    query = f"citas_calendario?fecha=eq.{fecha}&hora=eq.{hora}:00&estado=in.(confirmada,reprogramada)&select=doctor_asignado"
+    """Encuentra médicos alternativos disponibles en esa misma fecha y hora (soporta HH:MM y HH:MM:SS)."""
+    hora_norm = str(hora)[:5]
+    query = f"citas_calendario?fecha=eq.{fecha}&hora=in.({hora_norm},{hora_norm}:00)&estado=in.(confirmada,reprogramada)&select=doctor_asignado"
     res = http_get(query)
     ocupados = {r.get("doctor_asignado") for r in res}
 
@@ -305,11 +307,17 @@ def main():
     fecha_objetivo = calcular_siguiente_dia_laboral()
     hora_preferente = "10:00"
 
-    # Verificar si el doctor de cabecera está ocupado a las 10:00
+    # Calcular día siguiente hábil
+    d_obj = datetime.date.fromisoformat(fecha_objetivo)
+    sig_dia = d_obj + datetime.timedelta(days=1)
+    while sig_dia.weekday() >= 5:
+        sig_dia += datetime.timedelta(days=1)
+    fecha_dia_siguiente = sig_dia.isoformat()
+
+    # Verificar si la doctora de cabecera está ocupada a las 10:00
     doctor_ocupado = verificar_disponibilidad_doctor(doctor_cabecera, fecha_objetivo, hora_preferente)
-    proxima_hora_cabecera = buscar_proximo_horario_libre_doctor(doctor_cabecera, fecha_objetivo)
-    medicos_turno = buscar_medicos_disponibles_en_horario(fecha_objetivo, hora_preferente, excluir_doctor=doctor_cabecera)
-    medico_alternativo = medicos_turno[0]["nombre"] if medicos_turno else "Dr. Fernando Castillo"
+    medico_turno = "Dr. Fernando Fernández"
+    hora_turno = "11:00"
 
     # Construir locución de saludo y memoria clínica
     resumen_clinico = generar_analisis_clinico_gemini(primer_nombre, ultimo_motivo, sugerencia_preventiva, doctor_cabecera)
@@ -328,18 +336,17 @@ def main():
         )
         escape_chars = "1230"
     elif doctor_ocupado:
-        # El doctor de cabecera ESTÁ OCUPADO en la hora preferente (10:00)
+        # Escenario Homologado: Doctora de Cabecera OCUPADA en la fecha indicada
         texto_audio += (
-            f"Le informamos que su doctora de cabecera, la {doctor_cabecera}, se encuentra ocupada el día {fecha_objetivo} a las {hora_preferente} horas. "
-            f"Sin embargo, tiene espacio disponible con ella ese mismo día a las {proxima_hora_cabecera} horas. "
-            f"O si requiere ser atendido a las {hora_preferente} horas, contamos con disponibilidad con el {medico_alternativo}. "
-            f"Presione 1 para agendar a las {proxima_hora_cabecera} con su doctora de cabecera {doctor_cabecera}. "
-            f"Presione 2 para agendar a las {hora_preferente} con el {medico_alternativo}. "
-            f"O presione 0 para transferir con un asesor humano."
+            f"Le informamos que su doctora de cabecera, la {doctor_cabecera}, se encuentra ocupada el día de hoy, {fecha_objetivo}, a las {hora_preferente} horas. "
+            f"Sin embargo, tenemos las siguientes opciones para usted: "
+            f"Presione 1 si desea ser atendido hoy mismo con el {medico_turno} a las {hora_turno} horas. "
+            f"O presione 2 para agendar con su doctora de cabecera {doctor_cabecera} para el día siguiente, {fecha_dia_siguiente}, a las {hora_preferente} horas. "
+            f"O presione 0 para transferir con un asesor médico."
         )
         escape_chars = "120"
     else:
-        # El doctor de cabecera ESTÁ DISPONIBLE a las 10:00
+        # La doctora de cabecera ESTÁ DISPONIBLE a las 10:00
         texto_audio += (
             f"Su doctora de cabecera, la {doctor_cabecera}, se encuentra disponible en nuestro calendario para el día {fecha_objetivo} a las {hora_preferente} horas. "
             f"Presione 1 para confirmar y agendar su cita con la {doctor_cabecera}. "
@@ -371,16 +378,32 @@ def main():
     # =========================================================================
 
     if tecla == "1":
-        # Agendar con Doctor de Cabecera
-        hora_agendada = proxima_hora_cabecera if doctor_ocupado else hora_preferente
-        doctor_final = doctor_cabecera
+        if doctor_ocupado and not cita_activa:
+            # Opción 1 del conflicto: Dr. Fernando Fernández mismo día a las 11:00
+            fecha_final = fecha_objetivo
+            hora_final = hora_turno
+            doctor_final = medico_turno
+            especialidad_final = "Medicina Interna y Cardiología"
+            mensaje_exito = (
+                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el día de hoy, {fecha_final} a las {hora_final} horas "
+                f"con el {doctor_final}. Su horario ha quedado reservado en el calendario."
+            )
+        else:
+            fecha_final = fecha_objetivo
+            hora_final = hora_preferente
+            doctor_final = doctor_cabecera
+            especialidad_final = "Medicina Familiar y Preventiva"
+            mensaje_exito = (
+                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el día {fecha_final} a las {hora_final} horas "
+                f"con su doctora de cabecera {doctor_final}. Le recordamos acudir en ayuno de 8 horas para su check-up de sangre."
+            )
 
         # 1. Crear evento en Google Calendar
         g_id = crear_evento_google_calendar(
             nombre=nombre,
             caller_id=caller_id,
-            fecha=fecha_objetivo,
-            hora=hora_agendada,
+            fecha=fecha_final,
+            hora=hora_final,
             motivo=sugerencia_preventiva,
             doctor=doctor_final
         )
@@ -389,13 +412,13 @@ def main():
         payload_cita = {
             "caller_id": caller_id,
             "paciente_nombre": nombre,
-            "fecha": fecha_objetivo,
-            "hora": f"{hora_agendada}:00",
-            "especialidad": "Medicina General y Laboratorio",
+            "fecha": fecha_final,
+            "hora": f"{hora_final}:00",
+            "especialidad": especialidad_final,
             "motivo": sugerencia_preventiva,
             "estado": "confirmada",
             "doctor_asignado": doctor_final,
-            "notas_ia": f"Google Calendar Event ID: {g_id or 'offline'} | Agendado por Agente IA Gemini"
+            "notas_ia": f"Google Calendar Event ID: {g_id or 'offline'} | Agendado por IA en Opción 4"
         }
         http_post("citas_calendario", payload_cita)
 
@@ -405,22 +428,17 @@ def main():
             "tipo": "entrante",
             "estado": "finalizada",
             "opcion_ivr_seleccionada": "4. Citas Médicas (Gemini IA)",
-            "resumen_ia": f"Cita confirmada con {doctor_final} el {fecha_objetivo} a las {hora_agendada} hrs para {nombre}. Motivo: {sugerencia_preventiva}.",
+            "resumen_ia": f"Cita confirmada con {doctor_final} el {fecha_final} a las {hora_final} hrs para {nombre}. Motivo: {sugerencia_preventiva}.",
             "notas_agente": f"Sincronizado con Google Calendar ID: {g_id or 'N/A'}"
         })
 
-        mensaje_exito = (
-            f"Excelente, {primer_nombre}. Su cita ha quedado confirmada en nuestro calendario para el día {fecha_objetivo} "
-            f"a las {hora_agendada} horas con su doctora de cabecera {doctor_final}. "
-            f"Le recordamos acudir en ayuno de 8 horas para su check-up de sangre. Muchas gracias por cuidar su salud."
-        )
         hablar(mensaje_exito)
 
     elif tecla == "2":
         if cita_activa:
             # Reprogramar cita activa
             nueva_hora = "15:00" if str(cita_activa.get("hora", ""))[:5] != "15:00" else "16:00"
-            nueva_fecha = fecha_objetivo
+            nueva_fecha = fecha_dia_siguiente
             http_patch(
                 f"citas_calendario?id=eq.{cita_activa.get('id')}",
                 {"fecha": nueva_fecha, "hora": f"{nueva_hora}:00", "estado": "confirmada", "notas_ia": "Reprogramada por el paciente vía IVR"}
@@ -430,6 +448,49 @@ def main():
                 f"a las {nueva_hora} horas. El horario ya se encuentra actualizado en el calendario."
             )
             hablar(mensaje_reprog)
+        elif doctor_ocupado:
+            # Opción 2 del conflicto: Dra. Mariana Fernández para el DÍA SIGUIENTE a las 10:00
+            fecha_final = fecha_dia_siguiente
+            hora_final = hora_preferente
+            doctor_final = doctor_cabecera
+            especialidad_final = "Medicina Familiar y Preventiva"
+
+            g_id = crear_evento_google_calendar(
+                nombre=nombre,
+                caller_id=caller_id,
+                fecha=fecha_final,
+                hora=hora_final,
+                motivo=sugerencia_preventiva,
+                doctor=doctor_final
+            )
+
+            payload_cita = {
+                "caller_id": caller_id,
+                "paciente_nombre": nombre,
+                "fecha": fecha_final,
+                "hora": f"{hora_final}:00",
+                "especialidad": especialidad_final,
+                "motivo": sugerencia_preventiva,
+                "estado": "confirmada",
+                "doctor_asignado": doctor_final,
+                "notas_ia": f"Google Calendar Event ID: {g_id or 'offline'} | Agendado para día siguiente con médico de cabecera"
+            }
+            http_post("citas_calendario", payload_cita)
+
+            http_post("llamadas_bitacora", {
+                "caller_id": caller_id,
+                "tipo": "entrante",
+                "estado": "finalizada",
+                "opcion_ivr_seleccionada": "4. Citas Médicas (Gemini IA)",
+                "resumen_ia": f"Cita confirmada con {doctor_final} para el día siguiente ({fecha_final} a las {hora_final} hrs) para {nombre}. Motivo: {sugerencia_preventiva}.",
+                "notas_agente": f"Sincronizado con Google Calendar ID: {g_id or 'N/A'}"
+            })
+
+            mensaje_sig = (
+                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el día de mañana, {fecha_final} a las {hora_final} horas "
+                f"con su doctora de cabecera {doctor_final}. Le recordamos acudir en ayuno de 8 horas para su check-up de sangre. Muchas gracias por cuidar su salud con nosotros."
+            )
+            hablar(mensaje_sig)
         else:
             # Agendar con Médico de Turno Disponible
             hora_agendada = hora_preferente
@@ -448,7 +509,7 @@ def main():
                 "caller_id": caller_id,
                 "paciente_nombre": nombre,
                 "fecha": fecha_objetivo,
-                "hora": f"{hora_agendada}:00",
+                "hora": str(hora_agendada)[:5],
                 "especialidad": "Medicina Interna y Laboratorio",
                 "motivo": sugerencia_preventiva,
                 "estado": "confirmada",
