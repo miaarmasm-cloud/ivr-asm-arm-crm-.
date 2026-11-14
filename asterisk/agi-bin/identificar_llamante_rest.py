@@ -180,14 +180,29 @@ def main():
 
     sintetizar_voz(texto_saludo, audio_path)
 
+    res = ""
     if os.path.exists(audio_path):
-        agi_cmd(f'STREAM FILE "{audio_base}" "123"')
+        res = agi_cmd(f'STREAM FILE "{audio_base}" "123"')
         try:
             os.remove(audio_path)
         except Exception:
             pass
     else:
-        agi_cmd('STREAM FILE "ivr-bienvenida-menu" "123"')
+        res = agi_cmd('STREAM FILE "ivr-bienvenida-menu" "123"')
+
+    # Soporte completo de Barge-in (Interrupción anticipada por DTMF)
+    if "result=49" in res:
+        # Pulsó '1' durante la bienvenida
+        agi_cmd('SET EXTENSION 1')
+        agi_cmd('SET PRIORITY 1')
+    elif "result=50" in res:
+        # Pulsó '2' durante la bienvenida
+        agi_cmd('SET EXTENSION 2')
+        agi_cmd('SET PRIORITY 1')
+    elif "result=51" in res:
+        # Pulsó '3' durante la bienvenida
+        agi_cmd('SET EXTENSION 3')
+        agi_cmd('SET PRIORITY 1')
 
 if __name__ == "__main__":
     main()
