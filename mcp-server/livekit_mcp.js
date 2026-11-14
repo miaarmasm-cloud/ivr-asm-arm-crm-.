@@ -58,7 +58,14 @@ function handleToolCall(name, args) {
       livekit_url: process.env.LIVEKIT_URL || 'http://localhost:7880',
       puerto_sip_senalizacion: '5060 (UDP/TCP)',
       puertos_audio_rtp: '10000-10100 (UDP)',
-      codecs_soportados: ['G.729', 'G.711u', 'G.711a', 'Opus'],
+      codecs_audio_sip: ['G.729', 'G.711u (PCMU)', 'G.711a (PCMA)', 'Opus'],
+      codecs_audio_webrtc: ['Opus', 'Audio RED (RFC 2198 - Redundant Audio Data)'],
+      codecs_video: ['H.264', 'VP8', 'VP9 (SVC)', 'AV1'],
+      compatibilidad_zoiper: {
+        audio: 'G.729 (Nativo/PRO), G.711u/a (Universal), Opus',
+        audio_red: 'No en SIP estándar (se transcodifica en LiveKit Gateway hacia WebRTC)',
+        video: 'H.264 (Zoiper Video PRO), VP8. VP9 y AV1 exclusivos para WebRTC/LiveKit'
+      },
       sip_gateway: 'LiveKit SIP Gateway (hostNetwork: true)',
       bypass_nat: 'activo'
     };

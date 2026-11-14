@@ -29,7 +29,9 @@ def livekit_estado_telefonia_sip() -> Dict[str, Any]:
         "livekit_url": LIVEKIT_URL,
         "puerto_sip_senalizacion": f"{SIP_PORT} (UDP/TCP)",
         "puertos_audio_rtp": "10000-10100 (UDP)",
-        "protocolos_soportados": ["G.729", "G.711u", "G.711a", "Opus"],
+        "codecs_audio_sip": ["G.729", "G.711u", "G.711a", "Opus"],
+        "codecs_audio_webrtc": ["Opus", "Audio RED (RFC 2198)"],
+        "codecs_video": ["H.264", "VP8", "VP9", "AV1"],
         "sip_gateway": "LiveKit SIP Gateway (hostNetwork: true)",
         "nat_bypass": "habilitado"
     }
