@@ -65,8 +65,8 @@ def consultar_supabase_rest(tarjeta, caller_id):
         "Content-Type": "application/json"
     }
 
-    # Búsqueda 1: Por dígitos de tarjeta ingresados
-    if tarjeta and len(tarjeta) >= 4:
+    # Búsqueda 1: Por dígitos de tarjeta ingresados (solo si son dígitos)
+    if tarjeta and tarjeta.isdigit() and len(tarjeta) >= 4:
         # Últimos 4 dígitos para match con la máscara (ej. **** 8821)
         terminacion = tarjeta[-4:]
         url = f"{SUPABASE_URL}/rest/v1/clientes?numero_tarjeta_mask=ilike.*{terminacion}*&select=*"
@@ -181,12 +181,6 @@ def sintetizar_fallback(texto, output_wav):
         subprocess.run(
             ["sox", raw_wav, "-r", "8000", "-c", "1", "-b", "16", output_wav],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        if os.path.exists(raw_wav):
-            os.remove(raw_wav)
-        return True
-    except Exception:
-        return False
         )
         if os.path.exists(raw_wav):
             os.remove(raw_wav)
