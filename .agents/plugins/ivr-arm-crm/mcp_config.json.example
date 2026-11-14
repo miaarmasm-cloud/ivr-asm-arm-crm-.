@@ -1,0 +1,46 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@supabase/mcp-server-supabase",
+        "--project-ref",
+        "xlmrmdxtrdomtrmnczwh"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "<TU_SUPABASE_TOKEN>"
+      }
+    },
+    "github": {
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "<TU_GITHUB_TOKEN>"
+      }
+    },
+    "kubernetes": {
+      "command": "node",
+      "args": [
+        "C:/Users/ecybe/OneDrive/Documentos/Ivr Arm Crm Arm/mcp-server/kubernetes_mcp.js"
+      ]
+    },
+    "livekit": {
+      "command": "node",
+      "args": [
+        "C:/Users/ecybe/OneDrive/Documentos/Ivr Arm Crm Arm/mcp-server/livekit_mcp.js"
+      ],
+      "env": {
+        "LIVEKIT_URL": "http://localhost:7880",
+        "LIVEKIT_SIP_PORT": "5060"
+      }
+    }
+  }
+}

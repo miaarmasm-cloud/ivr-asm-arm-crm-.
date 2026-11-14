@@ -41,6 +41,7 @@ livekit-records/
 # Credentials & Secrets (Local only, never push to git)
 credenciales/
 mcp-server/mcp_config.json
+.agents/plugins/**/mcp_config.json
 *.txt
 *.pem
 *.key

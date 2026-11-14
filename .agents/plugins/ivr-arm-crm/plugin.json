@@ -1,0 +1,5 @@
+{
+  "name": "ivr-arm-crm",
+  "description": "Ecosistema MCP dedicado para IVR ARM CRM (Supabase, GitHub, Kubernetes, LiveKit SIP)",
+  "version": "1.0.0"
+}
