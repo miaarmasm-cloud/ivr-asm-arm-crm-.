@@ -80,7 +80,7 @@ def consultar_cliente_por_callerid(caller_id):
     return None
 
 def sintetizar_voz(texto, output_wav):
-    # Intento 1: ElevenLabs si hay API Key
+    # 1. Si el usuario configuró ElevenLabs con API Key
     if ELEVENLABS_API_KEY:
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
         headers = {
@@ -107,7 +107,26 @@ def sintetizar_voz(texto, output_wav):
         except Exception as e:
             sys.stderr.write(f"Fallo ElevenLabs: {e}\n")
 
-    # Fallback local de voz en español
+    # 2. MOTOR NEURAL DE VOZ HUMANA 100% GRATIS (Microsoft Azure Speech Neural)
+    # Voz: es-MX-DaliaNeural (Voz femenina mexicana natural, fluida y expresiva)
+    tmp_edge_mp3 = f"/tmp/edge_{int(time.time()*1000)}.mp3"
+    try:
+        cmd_edge = [
+            "edge-tts",
+            "--voice", "es-MX-DaliaNeural",
+            "--text", texto,
+            "--write-media", tmp_edge_mp3
+        ]
+        subprocess.run(cmd_edge, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cmd_ff = ["ffmpeg", "-y", "-i", tmp_edge_mp3, "-ar", "8000", "-ac", "1", "-acodec", "pcm_s16le", output_wav]
+        subprocess.run(cmd_ff, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(tmp_edge_mp3):
+            os.remove(tmp_edge_mp3)
+        return True
+    except Exception as e:
+        sys.stderr.write(f"Fallo Edge-TTS: {e}\n")
+
+    # 3. Fallback local rápido
     raw_wav = f"{output_wav}.raw.wav"
     try:
         subprocess.run(["espeak-ng", "-v", "es-la", "-s", "140", "-w", raw_wav, texto], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

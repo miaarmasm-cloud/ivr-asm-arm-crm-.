@@ -158,7 +158,20 @@ def sintetizar_audio_elevenlabs(texto, output_wav):
         return False
 
 def sintetizar_fallback(texto, output_wav):
-    """Fallback local rápido para síntesis de voz en español."""
+    """Síntesis de voz humana natural 100% gratuita con Microsoft Azure Neural Voices (edge-tts)."""
+    tmp_edge = f"/tmp/edge_sal_{int(time.time()*1000)}.mp3"
+    try:
+        cmd_edge = ["edge-tts", "--voice", "es-MX-DaliaNeural", "--text", texto, "--write-media", tmp_edge]
+        subprocess.run(cmd_edge, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cmd_ff = ["ffmpeg", "-y", "-i", tmp_edge, "-ar", "8000", "-ac", "1", "-acodec", "pcm_s16le", output_wav]
+        subprocess.run(cmd_ff, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(tmp_edge):
+            os.remove(tmp_edge)
+        return True
+    except Exception as e:
+        sys.stderr.write(f"Fallo Edge-TTS: {e}\n")
+
+    # Fallback local rápido si falla la conexión
     raw_wav = f"{output_wav}.raw.wav"
     try:
         subprocess.run(
@@ -168,6 +181,12 @@ def sintetizar_fallback(texto, output_wav):
         subprocess.run(
             ["sox", raw_wav, "-r", "8000", "-c", "1", "-b", "16", output_wav],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if os.path.exists(raw_wav):
+            os.remove(raw_wav)
+        return True
+    except Exception:
+        return False
         )
         if os.path.exists(raw_wav):
             os.remove(raw_wav)
@@ -195,8 +214,34 @@ def main():
 
     if cliente:
         nombre = cliente.get("nombre_completo", "Estimado cliente")
-        saldo = float(cliente.get("saldo", 0.0))
+        estatus = int(cliente.get("estatus_tarjeta", 1))
         mask = cliente.get("numero_tarjeta_mask", "su tarjeta")
+        saldo = float(cliente.get("saldo", 0.0))
+
+        # VALIDACIÓN DE REGLA DE NEGOCIO: Si estatus == 2 (Cancelada), NO regresar saldo
+        if estatus == 2:
+            texto = (
+                f"Estimado cliente {nombre}. Le informamos que su tarjeta con terminación {mask[-4:]} "
+                f"se encuentra actualmente cancelada o bloqueada. Por motivos de seguridad, "
+                f"no es posible consultar el saldo en este momento. Lo comunicaremos con un asesor."
+            )
+            resumen = f"Consulta de saldo rechazada: Tarjeta {mask} en estatus 2 (Cancelada/Bloqueada). Saldo oculto."
+            registrar_llamada_crm(cliente, caller_id, "1. Consulta Saldo DENEGADA (Cancelada)", resumen)
+
+            ok = sintetizar_audio_elevenlabs(texto, audio_path)
+            if not ok:
+                sintetizar_fallback(texto, audio_path)
+
+            if os.path.exists(audio_path):
+                agi_cmd(f'STREAM FILE "{audio_agi_name}" ""')
+                try:
+                    os.remove(audio_path)
+                except Exception:
+                    pass
+            # Transferencia a ejecutivo de retenciones / soporte
+            agi_cmd('EXEC Dial "PJSIP/2001,30"')
+            return
+
         pesos = int(saldo)
         centavos = int(round((saldo - pesos) * 100))
 
@@ -208,7 +253,7 @@ def main():
         )
 
         # Registrar en la bitácora del CRM
-        resumen = f"Consulta exitosa de saldo: ${saldo:,.2f} MXN en tarjeta {mask} para {nombre}"
+        resumen = f"Consulta exitosa de saldo: ${saldo:,.2f} MXN en tarjeta {mask} para {nombre} (Estatus 1 Activa)"
         registrar_llamada_crm(cliente, caller_id, "1. Consulta de Saldo DTMF", resumen)
 
     else:
