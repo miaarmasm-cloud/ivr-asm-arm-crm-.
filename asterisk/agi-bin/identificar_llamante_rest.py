@@ -236,6 +236,11 @@ def main():
     extension_agente = campana.get("extension_agente", "2001")
     enrutamiento_directo = campana.get("enrutamiento_directo")
 
+    # Si se marca la cabecera fija del conmutador (8000, 8009990000, 5550001000),
+    # el menú completo de opciones (1, 2, 3, 4) es obligatorio y no desvía directo.
+    if str(did_marcado).strip() in ["8000", "8009990000", "5550001000"]:
+        enrutamiento_directo = None
+
     # 2. Consultar Cliente por CallerID
     cliente = consultar_cliente_por_callerid(caller_id)
     cliente_id = cliente.get("id") if cliente else None
