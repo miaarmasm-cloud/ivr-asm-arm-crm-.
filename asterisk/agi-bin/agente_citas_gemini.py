@@ -1,29 +1,27 @@
 #!/usr/bin/env python3
 """
 =============================================================================
-ASTERISK 20 AGI: AGENTE CLÍNICO INTELIGENTE (GEMINI 1.5 + CBR + GOOGLE CALENDAR)
+ASTERISK 20 AGI: AGENTE CLÍNICO INTELIGENTE (OPCIÓN 4: AGENDA & GOOGLE CALENDAR)
 =============================================================================
-1. Identificación por CallerID en Supabase REST API y memoria clínica previa.
-2. Consulta de Historial Clínico (CBR):
-   - Ejemplo: Carlos Mendoza vino el mes pasado por revisión de presión arterial.
-   - Recomendación IA: Check-up general de sangre y perfil lipídico.
-   - Doctor de cabecera asignado: Dra. Mariana Gómez.
-3. Validación en Calendario (Lunes a Viernes, 9:00 AM a 6:00 PM):
-   - Verifica si el Doctor de Cabecera está DISPONIBLE u OCUPADO en ese horario.
-   - Si está OCUPADO:
-     * Informa al paciente que su doctor de cabecera ya está ocupado en esa hora.
-     * Ofrece el siguiente horario disponible con su doctor de cabecera (ej. 15:00 hrs).
-     * O le asigna los médicos disponibles de turno ese mismo día (Dr. Fernando Fernández / Dra. Sofía Navarro).
-   - Si está DISPONIBLE:
-     * Confirma el horario con su doctor de cabecera.
-4. Sincronización en vivo bidireccional:
-   - Sincroniza con Google Calendar (OAuth 2) y Supabase 'citas_calendario'.
-   - Registra en 'llamadas_bitacora' para Screen-Pop en el CRM Next.js.
-5. Menú interactivo DTMF y voz humana ultra-natural (es-MX-DaliaNeural):
-   - 1: Agendar con Doctor de Cabecera en horario disponible.
-   - 2: Agendar con Médico de Turno disponible el mismo día / Reprogramar.
-   - 3: Cancelar cita activa y liberar horario en Google Calendar.
-   - 0: Transferencia a especialista humano (Dra. Mariana Gómez - Ext. 2001).
+1. Identificación por CallerID en Supabase REST API y memoria clínica previa (CBR).
+2. Consulta de Historial Clínico previo:
+   - Paciente: Anto Krpax X (o Carlos Mendoza / 1001).
+   - Doctora de Cabecera: Dra. Mariana Fernández.
+   - Último motivo y sugerencia preventiva del expediente.
+3. Validación de Disponibilidad en TIEMPO REAL:
+   - Sincronización bidireccional con Google Calendar API v3 (OAuth 2.0 mia-asm-arm).
+   - Validación cruzada contra 'citas_calendario' en Supabase.
+   - Detecta si la Dra. Mariana Fernández está OCUPADA (ej. 10:00 AM) o LIBRE.
+4. Opciones Homologadas DTMF (Voz Neural es-MX-DaliaNeural + Barge-in):
+   - Si la doctora está ocupada:
+     * 1: Agendar con Médico de Turno (Dr. Fernando Fernández a las 11:00 hrs).
+     * 2: Agendar con Doctora de Cabecera para el día siguiente hábil a las 10:00 hrs.
+     * 0: Transferir con especialista humano (Ext. 2001).
+   - Si ya tiene cita activa:
+     * 1: Confirmar asistencia.
+     * 2: Reprogramar.
+     * 3: Cancelar y liberar espacio en Google Calendar.
+     * 0: Hablar con asesor.
 =============================================================================
 """
 
@@ -36,7 +34,7 @@ import urllib.request
 import urllib.parse
 import subprocess
 
-# Configuración de URLs y Credenciales
+# Configuración de URLs y Credenciales Supabase
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xlmrmdxtrdomtrmnczwh.supabase.co")
 SUPABASE_KEY = os.environ.get(
     "SUPABASE_ANON_KEY",
@@ -52,7 +50,22 @@ HEADERS = {
 }
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TOKEN_FILE = os.path.join(BASE_DIR, 'google_token.json')
+
+# Rutas de búsqueda de credenciales Google OAuth 2.0
+TOKEN_SEARCH_PATHS = [
+    os.path.join(BASE_DIR, 'google_token.json'),
+    "/var/lib/asterisk/agi-bin/google_token.json",
+    os.path.abspath(os.path.join(BASE_DIR, '../../mcp-server/google_token.json')),
+    "/app/mcp-server/google_token.json",
+    "mcp-server/google_token.json"
+]
+
+DOCTOR_EMAILS = {
+    "Dra. Mariana Fernández": "mariana.fernandez@clinica-arm.com",
+    "Dr. Fernando Fernández": "fernando.fernandez@clinica-arm.com",
+    "Dra. Sofía Navarro": "sofia.navarro@clinica-arm.com",
+    "Dra. Mariana Gómez": "mariana.gomez@clinica-arm.com"
+}
 
 PLANTILLA_MEDICOS = [
     {"nombre": "Dra. Mariana Fernández", "especialidad": "Medicina Familiar y Preventiva"},
@@ -61,6 +74,11 @@ PLANTILLA_MEDICOS = [
 ]
 
 HORAS_LABORALES = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00"]
+
+
+# =============================================================================
+# COMUNICACIÓN AGI ASTERISK Y SÍNTESIS DE VOZ NEURAL
+# =============================================================================
 
 def agi_cmd(cmd):
     print(cmd, flush=True)
@@ -78,7 +96,7 @@ def leer_variables_agi():
     return agi_env
 
 def hablar(texto, escape_digits=""):
-    """Sintetiza texto con voz neural mexicana (DaliaNeural) y lo reproduce en Asterisk."""
+    """Sintetiza texto con voz neural mexicana (es-MX-DaliaNeural) con interrupción por teclado (Barge-in)."""
     uid = int(time.time() * 1000)
     tmp_mp3 = f"/tmp/citas_{uid}.mp3"
     tmp_wav = f"/tmp/citas_{uid}.wav"
@@ -102,6 +120,11 @@ def hablar(texto, escape_digits=""):
         except Exception:
             pass
     return res
+
+
+# =============================================================================
+# CLIENTE HTTP REST SUPABASE
+# =============================================================================
 
 def http_get(endpoint):
     url = f"{SUPABASE_URL}/rest/v1/{endpoint}"
@@ -138,22 +161,89 @@ def http_patch(endpoint, data):
         sys.stderr.write(f"HTTP PATCH Error ({endpoint}): {e}\n")
     return None
 
+
 # =============================================================================
-# SINCRONIZACIÓN CON GOOGLE CALENDAR API v3
+# SINCRONIZACIÓN HOMOLOGADA CON GOOGLE CALENDAR API v3 (OAUTH 2.0)
 # =============================================================================
 
 def get_google_access_token():
-    if not os.path.exists(TOKEN_FILE):
+    """Localiza y refresca el token de acceso de Google Calendar automáticamente."""
+    token_file = None
+    for p in TOKEN_SEARCH_PATHS:
+        if os.path.exists(p):
+            token_file = p
+            break
+
+    if not token_file:
+        sys.stderr.write("Aviso: google_token.json no encontrado.\n")
         return None
+
     try:
-        with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+        with open(token_file, "r", encoding="utf-8") as f:
             token_data = json.load(f)
+
+        # Refrescar si está expirado o tiene refresh_token
+        if token_data.get("refresh_token") and token_data.get("client_id") and token_data.get("client_secret"):
+            now = time.time()
+            expiry = token_data.get("expiry")
+            needs_refresh = False
+            if expiry:
+                try:
+                    dt = datetime.datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+                    if dt.timestamp() < now + 120:
+                        needs_refresh = True
+                except Exception:
+                    needs_refresh = True
+            else:
+                needs_refresh = True
+
+            if needs_refresh:
+                params = urllib.parse.urlencode({
+                    "client_id": token_data["client_id"],
+                    "client_secret": token_data["client_secret"],
+                    "refresh_token": token_data["refresh_token"],
+                    "grant_type": "refresh_token"
+                }).encode()
+                req = urllib.request.Request("https://oauth2.googleapis.com/token", data=params, method="POST")
+                try:
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        if resp.status == 200:
+                            refreshed = json.loads(resp.read().decode())
+                            token_data["token"] = refreshed["access_token"]
+                            token_data["expiry"] = datetime.datetime.utcnow().isoformat() + "Z"
+                            with open(token_file, "w", encoding="utf-8") as out:
+                                json.dump(token_data, out, indent=2)
+                            return token_data["token"]
+                except Exception as ref_err:
+                    sys.stderr.write(f"Aviso al refrescar token: {ref_err}\n")
+
         return token_data.get("token")
     except Exception as e:
         sys.stderr.write(f"Error cargando google_token: {e}\n")
         return None
 
-def crear_evento_google_calendar(nombre, caller_id, fecha, hora, motivo, doctor):
+def verificar_disponibilidad_google_calendar(fecha, hora):
+    """Consulta la API de Google Calendar en vivo para ver si la hora solicitada está ocupada."""
+    token = get_google_access_token()
+    if not token:
+        return False
+    try:
+        h_int = int(hora.split(':')[0])
+        time_min = f"{fecha}T{h_int:02d}:00:00Z"
+        time_max = f"{fecha}T{(h_int+1):02d}:00:00Z"
+        url = f"https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin={urllib.parse.quote(time_min)}&timeMax={urllib.parse.quote(time_max)}&singleEvents=true"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode())
+                items = data.get("items", [])
+                return len(items) > 0
+    except Exception as e:
+        sys.stderr.write(f"Google Calendar check error: {e}\n")
+    return False
+
+def crear_evento_google_calendar(nombre, caller_id, fecha, hora, motivo, doctor, paciente_email=None):
+    """Inserta evento en Google Calendar homologando al Doctor y Paciente como asistentes."""
     token = get_google_access_token()
     if not token:
         return None
@@ -163,15 +253,25 @@ def crear_evento_google_calendar(nombre, caller_id, fecha, hora, motivo, doctor)
         start_dt = f"{fecha}T{h_int:02d}:{m_int:02d}:00-06:00"
         end_dt = f"{fecha}T{(h_int+1):02d}:{m_int:02d}:00-06:00"
 
+        doc_email = DOCTOR_EMAILS.get(doctor, "miaarmasm@gmail.com")
+        attendees = [
+            {"email": doc_email, "displayName": doctor}
+        ]
+        if paciente_email:
+            attendees.append({"email": paciente_email, "displayName": nombre})
+        else:
+            attendees.append({"email": "anto.krpax@gmail.com", "displayName": nombre})
+
         event_body = {
-            'summary': f"Cita Médica ARM: {nombre} ({caller_id})",
-            'description': f"Paciente: {nombre}\nCallerID: {caller_id}\nDoctor Asignado: {doctor}\nMotivo: {motivo}\nRegistrado por Agente IA Gemini ARM.",
+            'summary': f"Cita Médica ARM: {nombre} ({caller_id}) - {doctor}",
+            'description': f"Paciente: {nombre}\nCallerID: {caller_id}\nDoctor Asignado: {doctor}\nMotivo: {motivo}\nRegistrado por Opción 4 del IVR ARM.",
             'start': {'dateTime': start_dt, 'timeZone': 'America/Mexico_City'},
             'end': {'dateTime': end_dt, 'timeZone': 'America/Mexico_City'},
+            'attendees': attendees,
             'colorId': '2'
         }
 
-        url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+        url = "https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all"
         req = urllib.request.Request(
             url,
             data=json.dumps(event_body).encode(),
@@ -181,7 +281,7 @@ def crear_evento_google_calendar(nombre, caller_id, fecha, hora, motivo, doctor)
             },
             method="POST"
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=6) as resp:
             if resp.status in (200, 201):
                 ev = json.loads(resp.read().decode())
                 return ev.get("id")
@@ -196,19 +296,20 @@ def eliminar_evento_google_calendar(google_event_id):
     if not token:
         return
     try:
-        url = f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{google_event_id}"
+        url = f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{google_event_id}?sendUpdates=all"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"}, method="DELETE")
         with urllib.request.urlopen(req, timeout=5) as resp:
             pass
     except Exception as e:
         sys.stderr.write(f"Google Calendar Delete Event Error: {e}\n")
 
+
 # =============================================================================
-# LÓGICA DE NEGOCIO: DOCTOR DE CABECERA Y DISPONIBILIDAD
+# VALIDACIONES DE DISPONIBILIDAD Y FORMATO
 # =============================================================================
 
 def formatear_fecha_es(fecha_iso):
-    """Convierte fecha YYYY-MM-DD en texto natural en español para voz TTS (ej. lunes 16 de noviembre)."""
+    """Convierte fecha YYYY-MM-DD en texto natural en español para voz TTS (ej. lunes 17 de noviembre)."""
     try:
         d = datetime.date.fromisoformat(str(fecha_iso)[:10])
         dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
@@ -220,54 +321,38 @@ def formatear_fecha_es(fecha_iso):
 def calcular_siguiente_dia_laboral():
     hoy = datetime.date.today()
     siguiente = hoy + datetime.timedelta(days=1)
-    # 0 = Lunes, 4 = Viernes, 5 = Sábado, 6 = Domingo
-    while siguiente.weekday() >= 5:
+    while siguiente.weekday() >= 5: # 5: Sab, 6: Dom
         siguiente += datetime.timedelta(days=1)
     return siguiente.isoformat()
 
 def verificar_disponibilidad_doctor(doctor_nombre, fecha, hora):
-    """Verifica si el médico específico está ocupado en la fecha y hora seleccionada (soporta HH:MM y HH:MM:SS)."""
+    """Verifica si el médico específico está ocupado en Supabase O en Google Calendar."""
     hora_norm = str(hora)[:5]
+    # 1. Consulta en Supabase
     query = f"citas_calendario?doctor_asignado=eq.{urllib.parse.quote(doctor_nombre)}&fecha=eq.{fecha}&hora=in.({hora_norm},{hora_norm}:00)&estado=in.(confirmada,reprogramada)&select=id"
     res = http_get(query)
-    return len(res) > 0  # True si está ocupado
+    if len(res) > 0:
+        return True
 
-def buscar_proximo_horario_libre_doctor(doctor_nombre, fecha):
-    """Busca el primer turno libre del doctor de cabecera en el rango de 9am a 6pm."""
-    query = f"citas_calendario?doctor_asignado=eq.{urllib.parse.quote(doctor_nombre)}&fecha=eq.{fecha}&estado=in.(confirmada,reprogramada)&select=hora"
-    res = http_get(query)
-    horas_ocupadas = {str(r.get("hora", ""))[:5] for r in res}
-    for h in HORAS_LABORALES:
-        if h not in horas_ocupadas:
-            return h
-    return "15:00"
+    # 2. Consulta en Google Calendar en tiempo real
+    if verificar_disponibilidad_google_calendar(fecha, hora_norm):
+        return True
 
-def buscar_medicos_disponibles_en_horario(fecha, hora, excluir_doctor=""):
-    """Encuentra médicos alternativos disponibles en esa misma fecha y hora (soporta HH:MM y HH:MM:SS)."""
-    hora_norm = str(hora)[:5]
-    query = f"citas_calendario?fecha=eq.{fecha}&hora=in.({hora_norm},{hora_norm}:00)&estado=in.(confirmada,reprogramada)&select=doctor_asignado"
-    res = http_get(query)
-    ocupados = {r.get("doctor_asignado") for r in res}
+    return False
 
-    libres = []
-    for m in PLANTILLA_MEDICOS:
-        if m["nombre"] != excluir_doctor and m["nombre"] not in ocupados:
-            libres.append(m)
-    return libres
 
 # =============================================================================
-# INTEGRACIÓN CON GEMINI 1.5 FLASH (O RAZONAMIENTO CLÍNICO CBR)
+# INTEGRACIÓN CON GEMINI / RAZONAMIENTO CBR
 # =============================================================================
 
 def generar_analisis_clinico_gemini(paciente, motivo_previo, recomendacion, doctor):
-    """Genera fraseo médico empático si Gemini 1.5 está activo, o razonamiento CBR predeterminado."""
     if GEMINI_API_KEY:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
             prompt = (
-                f"Eres un agente médico telefónico inteligente. El paciente {paciente} acudió el mes pasado por {motivo_previo}. "
-                f"La sugerencia preventiva es {recomendacion} con su médico {doctor}. "
-                f"Genera en máximo 2 oraciones breves y profesionales en español de México el saludo y la sugerencia preventiva para leer en voz alta."
+                f"Eres un agente médico telefónico inteligente del IVR. El paciente {paciente} acudió previamente por {motivo_previo}. "
+                f"La recomendación preventiva es {recomendacion} con {doctor}. "
+                f"Genera en máximo 2 oraciones concisas y amables en español de México el saludo y la sugerencia preventiva para leer en voz alta."
             )
             body = {"contents": [{"parts": [{"text": prompt}]}]}
             req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
@@ -276,70 +361,69 @@ def generar_analisis_clinico_gemini(paciente, motivo_previo, recomendacion, doct
                     data = json.loads(resp.read().decode())
                     return data["candidates"][0]["content"]["parts"][0]["text"].strip()
         except Exception as e:
-            sys.stderr.write(f"Gemini 1.5 Fallback: {e}\n")
+            sys.stderr.write(f"Gemini API Fallback: {e}\n")
 
-    # Razonamiento clínico determinístico CBR
     return (
-        f"En su expediente tengo registrado que el mes pasado acudió para {motivo_previo}. "
-        f"Nuestra recomendación médica preventiva para este mes es {recomendacion}."
+        f"En su expediente tengo registrado que en su última consulta acudió por {motivo_previo}. "
+        f"Nuestra recomendación médica preventiva es {recomendacion}."
     )
 
+
 # =============================================================================
-# EJECUCIÓN PRINCIPAL DEL AGI
+# FLUJO PRINCIPAL DE OPCIÓN 4
 # =============================================================================
 
 def main():
     agi_env = leer_variables_agi()
     caller_id = sys.argv[1] if len(sys.argv) > 1 else agi_env.get("agi_callerid", "1001")
 
-    # 1. Obtener datos del cliente y su historial clínico
+    # 1. Obtener datos del paciente y su historial clínico (CBR)
     clientes = http_get(f"clientes?caller_id=eq.{caller_id}&select=*")
     cliente = clientes[0] if clientes else None
-    nombre = cliente.get("nombre_completo", "Carlos Mendoza Ortiz") if cliente else "Estimado paciente"
+    nombre = cliente.get("nombre_completo", "Anto Krpax X") if cliente else "Estimado paciente"
     primer_nombre = nombre.split()[0]
+    paciente_email = cliente.get("email") if cliente else "anto.krpax@gmail.com"
 
     historiales = http_get(f"historial_clinico_pacientes?caller_id=eq.{caller_id}&select=*&order=fecha_ultima_consulta.desc&limit=1")
     historial = historiales[0] if historiales else None
 
-    # 2. Determinar médico de cabecera y sugerencia preventiva
-    doctor_cabecera = historial.get("doctor_asignado", "Dra. Mariana Gómez") if historial else "Dra. Mariana Gómez"
-    ultimo_motivo = historial.get("ultimo_motivo", "Revisión y monitoreo de presión arterial") if historial else "Revisión general"
+    # 2. Identificar médico de cabecera y sugerencia preventiva
+    doctor_cabecera = historial.get("doctor_asignado", "Dra. Mariana Fernández") if historial else "Dra. Mariana Fernández"
+    ultimo_motivo = historial.get("ultimo_motivo", "Revisión de presión arterial y chequeo general") if historial else "Consulta general"
     sugerencia_preventiva = historial.get(
         "sugerencia_preventiva_ia",
-        "Validar diagnóstico con un check-up general de sangre (química sanguínea de 24 elementos y perfil lipídico completo)"
-    ) if historial else "Check-up general preventivo"
+        "Check-up general de sangre y perfil lipídico completo"
+    ) if historial else "Chequeo preventivo semestral"
 
     # 3. Verificar si el paciente ya tiene una cita activa confirmada
     citas_activas = http_get(f"citas_calendario?caller_id=eq.{caller_id}&estado=in.(confirmada,reprogramada)&select=*&order=fecha.desc&limit=1")
     cita_activa = citas_activas[0] if citas_activas else None
 
-    # 4. Calcular fecha y evaluar disponibilidad del Doctor de Cabecera
+    # 4. Horarios objetivo
     fecha_objetivo = calcular_siguiente_dia_laboral()
     hora_preferente = "10:00"
 
-    # Calcular día siguiente hábil
+    # Siguiente día hábil
     d_obj = datetime.date.fromisoformat(fecha_objetivo)
     sig_dia = d_obj + datetime.timedelta(days=1)
     while sig_dia.weekday() >= 5:
         sig_dia += datetime.timedelta(days=1)
     fecha_dia_siguiente = sig_dia.isoformat()
 
-    # Verificar si la doctora de cabecera está ocupada a las 10:00
+    # Validar disponibilidad de la doctora de cabecera
     doctor_ocupado = verificar_disponibilidad_doctor(doctor_cabecera, fecha_objetivo, hora_preferente)
     medico_turno = "Dr. Fernando Fernández"
     hora_turno = "11:00"
 
-    # Construir locución de saludo y memoria clínica
+    # Construir locución guiada
     resumen_clinico = generar_analisis_clinico_gemini(primer_nombre, ultimo_motivo, sugerencia_preventiva, doctor_cabecera)
-
-    texto_audio = f"Hola {primer_nombre}, bienvenido a su asistente médico inteligente con inteligencia artificial Gemini. {resumen_clinico} "
+    texto_audio = f"Hola {primer_nombre}, bienvenido a la opción de citas médicas del sistema ARM. {resumen_clinico} "
 
     fecha_obj_txt = formatear_fecha_es(fecha_objetivo)
     fecha_sig_txt = formatear_fecha_es(fecha_dia_siguiente)
 
     if cita_activa:
         fecha_activa_txt = formatear_fecha_es(cita_activa.get('fecha'))
-        # El paciente ya tiene una cita agendada
         texto_audio += (
             f"Actualmente usted cuenta con una cita confirmada para el día {fecha_activa_txt} "
             f"a las {str(cita_activa.get('hora'))[:5]} horas con {cita_activa.get('doctor_asignado')}. "
@@ -350,7 +434,6 @@ def main():
         )
         escape_chars = "1230"
     elif doctor_ocupado:
-        # Escenario Homologado: Doctora de Cabecera OCUPADA en la fecha indicada
         texto_audio += (
             f"Le informamos que su doctora de cabecera, la {doctor_cabecera}, se encuentra ocupada el {fecha_obj_txt} a las {hora_preferente} horas. "
             f"Sin embargo, tenemos las siguientes opciones para usted: "
@@ -360,7 +443,6 @@ def main():
         )
         escape_chars = "120"
     else:
-        # La doctora de cabecera ESTÁ DISPONIBLE a las 10:00
         texto_audio += (
             f"Su doctora de cabecera, la {doctor_cabecera}, se encuentra disponible en nuestro calendario para el día {fecha_obj_txt} a las {hora_preferente} horas. "
             f"Presione 1 para confirmar y agendar su cita con la {doctor_cabecera}. "
@@ -369,7 +451,6 @@ def main():
         )
         escape_chars = "120"
 
-    # Reproducir audio y capturar tecla DTMF con Barge-in
     res = hablar(texto_audio, escape_chars)
 
     tecla = ""
@@ -388,19 +469,18 @@ def main():
                 break
 
     # =========================================================================
-    # ACCIONES SEGÚN LA TECLA PULSADA
+    # ACCIONES DTMF
     # =========================================================================
 
     if tecla == "1":
         if doctor_ocupado and not cita_activa:
-            # Opción 1 del conflicto: Dr. Fernando Fernández mismo día a las 11:00
             fecha_final = fecha_objetivo
             hora_final = hora_turno
             doctor_final = medico_turno
             especialidad_final = "Medicina Interna y Cardiología"
             mensaje_exito = (
                 f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el {formatear_fecha_es(fecha_final)} a las {hora_final} horas "
-                f"con el {doctor_final}. Su horario ha quedado reservado en el calendario."
+                f"con el {doctor_final}. Su horario ha quedado reservado en Google Calendar."
             )
         else:
             fecha_final = fecha_objetivo
@@ -409,7 +489,7 @@ def main():
             especialidad_final = "Medicina Familiar y Preventiva"
             mensaje_exito = (
                 f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el {formatear_fecha_es(fecha_final)} a las {hora_final} horas "
-                f"con su doctora de cabecera {doctor_final}. Le recordamos acudir en ayuno de 8 horas para su check-up de sangre."
+                f"con su doctora de cabecera {doctor_final}. Hemos sincronizado su evento en Google Calendar."
             )
 
         # 1. Crear evento en Google Calendar
@@ -419,7 +499,8 @@ def main():
             fecha=fecha_final,
             hora=hora_final,
             motivo=sugerencia_preventiva,
-            doctor=doctor_final
+            doctor=doctor_final,
+            paciente_email=paciente_email
         )
 
         # 2. Insertar cita en Supabase
@@ -432,16 +513,16 @@ def main():
             "motivo": sugerencia_preventiva,
             "estado": "confirmada",
             "doctor_asignado": doctor_final,
-            "notas_ia": f"Google Calendar Event ID: {g_id or 'offline'} | Agendado por IA en Opción 4"
+            "notas_ia": f"Google Calendar Event ID: {g_id or 'offline'} | Agendado por Opción 4 del IVR"
         }
         http_post("citas_calendario", payload_cita)
 
-        # 3. Notificar en bitácora para Screen-Pop en CRM
+        # 3. Notificar en bitácora para Screen-Pop en el CRM
         http_post("llamadas_bitacora", {
             "caller_id": caller_id,
             "tipo": "entrante",
             "estado": "finalizada",
-            "opcion_ivr_seleccionada": "4. Citas Médicas (Gemini IA)",
+            "opcion_ivr_seleccionada": "4. Citas Médicas (Google Calendar Homologado)",
             "resumen_ia": f"Cita confirmada con {doctor_final} el {fecha_final} a las {hora_final} hrs para {nombre}. Motivo: {sugerencia_preventiva}.",
             "notas_agente": f"Sincronizado con Google Calendar ID: {g_id or 'N/A'}"
         })
@@ -450,20 +531,18 @@ def main():
 
     elif tecla == "2":
         if cita_activa:
-            # Reprogramar cita activa
             nueva_hora = "15:00" if str(cita_activa.get("hora", ""))[:5] != "15:00" else "16:00"
             nueva_fecha = fecha_dia_siguiente
             http_patch(
                 f"citas_calendario?id=eq.{cita_activa.get('id')}",
-                {"fecha": nueva_fecha, "hora": f"{nueva_hora}:00", "estado": "confirmada", "notas_ia": "Reprogramada por el paciente vía IVR"}
+                {"fecha": nueva_fecha, "hora": f"{nueva_hora}:00", "estado": "confirmada", "notas_ia": "Reprogramada por el paciente vía IVR Opción 4"}
             )
             mensaje_reprog = (
-                f"Su cita médica ha sido reprogramada exitosamente para el día {nueva_fecha} "
+                f"Su cita médica ha sido reprogramada exitosamente para el día {formatear_fecha_es(nueva_fecha)} "
                 f"a las {nueva_hora} horas. El horario ya se encuentra actualizado en el calendario."
             )
             hablar(mensaje_reprog)
         elif doctor_ocupado:
-            # Opción 2 del conflicto: Dra. Mariana Fernández para el DÍA SIGUIENTE a las 10:00
             fecha_final = fecha_dia_siguiente
             hora_final = hora_preferente
             doctor_final = doctor_cabecera
@@ -475,7 +554,8 @@ def main():
                 fecha=fecha_final,
                 hora=hora_final,
                 motivo=sugerencia_preventiva,
-                doctor=doctor_final
+                doctor=doctor_final,
+                paciente_email=paciente_email
             )
 
             payload_cita = {
@@ -495,20 +575,19 @@ def main():
                 "caller_id": caller_id,
                 "tipo": "entrante",
                 "estado": "finalizada",
-                "opcion_ivr_seleccionada": "4. Citas Médicas (Gemini IA)",
+                "opcion_ivr_seleccionada": "4. Citas Médicas (Google Calendar Homologado)",
                 "resumen_ia": f"Cita confirmada con {doctor_final} para el día siguiente ({fecha_final} a las {hora_final} hrs) para {nombre}. Motivo: {sugerencia_preventiva}.",
                 "notas_agente": f"Sincronizado con Google Calendar ID: {g_id or 'N/A'}"
             })
 
             mensaje_sig = (
                 f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el {formatear_fecha_es(fecha_final)} a las {hora_final} horas "
-                f"con su doctora de cabecera {doctor_final}. Le recordamos acudir en ayuno de 8 horas para su check-up de sangre. Muchas gracias por cuidar su salud con nosotros."
+                f"con su doctora de cabecera {doctor_final}. Muchas gracias por agendar con nosotros."
             )
             hablar(mensaje_sig)
         else:
-            # Agendar con Médico de Turno Disponible
-            hora_agendada = hora_preferente
-            doctor_final = medico_alternativo
+            hora_agendada = hora_turno
+            doctor_final = medico_turno
 
             g_id = crear_evento_google_calendar(
                 nombre=nombre,
@@ -516,31 +595,31 @@ def main():
                 fecha=fecha_objetivo,
                 hora=hora_agendada,
                 motivo=sugerencia_preventiva,
-                doctor=doctor_final
+                doctor=doctor_final,
+                paciente_email=paciente_email
             )
 
             payload_cita = {
                 "caller_id": caller_id,
                 "paciente_nombre": nombre,
                 "fecha": fecha_objetivo,
-                "hora": str(hora_agendada)[:5],
-                "especialidad": "Medicina Interna y Laboratorio",
+                "hora": f"{hora_agendada}:00",
+                "especialidad": "Medicina Interna y Cardiología",
                 "motivo": sugerencia_preventiva,
                 "estado": "confirmada",
                 "doctor_asignado": doctor_final,
-                "notas_ia": f"Google Calendar Event ID: {g_id or 'offline'} | Médico de turno asignado por IA"
+                "notas_ia": f"Google Calendar Event ID: {g_id or 'offline'} | Médico de turno asignado en Opción 4"
             }
             http_post("citas_calendario", payload_cita)
 
             mensaje_turno = (
-                f"Perfecto, {primer_nombre}. Su cita para el check-up de sangre ha quedado reservada para el día {fecha_objetivo} "
-                f"a las {hora_agendada} horas con el {doctor_final}. Su espacio en el calendario ha quedado asegurado."
+                f"Perfecto, {primer_nombre}. Su cita ha quedado reservada para el día {formatear_fecha_es(fecha_objetivo)} "
+                f"a las {hora_agendada} horas con el {doctor_final}."
             )
             hablar(mensaje_turno)
 
     elif tecla == "3":
         if cita_activa:
-            # Cancelar cita activa
             notas = str(cita_activa.get("notas_ia", ""))
             if "Google Calendar Event ID: " in notas:
                 gid = notas.split("Google Calendar Event ID: ")[1].strip().split()[0]
@@ -548,23 +627,21 @@ def main():
 
             http_patch(
                 f"citas_calendario?id=eq.{cita_activa.get('id')}",
-                {"estado": "cancelada", "notas_ia": "Cancelada por el paciente vía IVR telefónico"}
+                {"estado": "cancelada", "notas_ia": "Cancelada por el paciente vía IVR Opción 4"}
             )
             mensaje_cancel = (
-                f"Su cita médica del día {cita_activa.get('fecha')} ha sido cancelada en el sistema. "
-                f"El espacio en el calendario ha quedado liberado. Podrá solicitar una nueva cita en cualquier momento."
+                f"Su cita médica del día {formatear_fecha_es(cita_activa.get('fecha'))} ha sido cancelada en el sistema. "
+                f"El espacio en Google Calendar ha quedado liberado."
             )
         else:
             mensaje_cancel = "No localizamos ninguna cita médica activa pendiente de cancelación en su expediente."
         hablar(mensaje_cancel)
 
     elif tecla == "0":
-        # Transferencia a Asesor / Especialista Humano
         hablar("Comprendo. En este momento lo estoy transfiriendo con un asesor médico para brindarle atención personalizada. Por favor permanezca en la línea.")
         agi_cmd('SET VARIABLE TRANSFERIR_HUMANO "1"')
 
     else:
-        # Fallback por opción no reconocida
         hablar("No logré identificar la opción seleccionada. Por su tranquilidad, lo comunicaré de inmediato con un asesor humano.")
         agi_cmd('SET VARIABLE TRANSFERIR_HUMANO "1"')
 

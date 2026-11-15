@@ -168,37 +168,93 @@ async def process_ivr_option(payload: ProcessOptionPayload):
     if selected_option == 1:
         saldo_actual = 0.00
         tarjeta_mask = "****"
+        estatus_tarjeta = 1
+        nombre_completo = "Cliente"
         if supabase:
-            res = supabase.table("clientes").select("saldo, numero_tarjeta_mask, nombre_completo").eq("caller_id", caller_id).execute()
+            res = supabase.table("clientes").select("id, saldo, numero_tarjeta_mask, nombre_completo, estatus_tarjeta").eq("caller_id", caller_id).execute()
             if res.data and len(res.data) > 0:
-                saldo_actual = res.data[0].get("saldo", 0.00)
+                saldo_actual = float(res.data[0].get("saldo", 0.00))
                 tarjeta_mask = res.data[0].get("numero_tarjeta_mask", "****")
+                estatus_tarjeta = int(res.data[0].get("estatus_tarjeta", 1))
+                nombre_completo = res.data[0].get("nombre_completo", "Cliente")
 
-        # Actualizar bitácora
+        # REGLA DE NEGOCIO: Si estatus == 2 (Cancelada), NO regresar saldo
+        if estatus_tarjeta == 2:
+            if supabase:
+                supabase.table("llamadas_bitacora").update({
+                    "opcion_ivr_seleccionada": "1. Consulta de Saldo DENEGADA",
+                    "resumen_ia": f"Consulta de saldo rechazada: Tarjeta {tarjeta_mask} se encuentra en estatus 2 (Cancelada). Saldo protegido."
+                }).eq("caller_id", caller_id).execute()
+
+            return {
+                "action": "speak_and_transfer",
+                "prompt_text": f"Estimado cliente, su tarjeta con terminación {tarjeta_mask[-4:]} se encuentra cancelada o bloqueada. Por seguridad, no es posible proporcionar el saldo en el IVR. Lo comunicamos con un asesor.",
+                "data": {"estatus_tarjeta": 2, "saldo_bloqueado": True},
+                "transfer_extension": "2001"
+            }
+
+        # Actualizar bitácora (Estatus 1 Activa)
         if supabase:
             supabase.table("llamadas_bitacora").update({
                 "opcion_ivr_seleccionada": "1. Consulta de Saldo",
-                "resumen_ia": f"El cliente consultó su saldo. Saldo informado: ${saldo_actual} MXN en tarjeta {tarjeta_mask}."
+                "resumen_ia": f"El cliente consultó su saldo. Saldo informado: ${saldo_actual:.2f} MXN en tarjeta {tarjeta_mask} (Estatus 1 Activa)."
             }).eq("caller_id", caller_id).execute()
 
         return {
             "action": "speak_and_hangup",
             "prompt_text": f"Su saldo disponible para la tarjeta con terminación {tarjeta_mask[-4:]} es de {saldo_actual:.2f} pesos. Gracias por llamar.",
-            "data": {"saldo": saldo_actual}
+            "data": {"saldo": saldo_actual, "estatus_tarjeta": 1}
         }
 
     # Opción 2: Cancelación
     elif selected_option == 2:
+        cliente_id = None
+        estatus_actual = 1
+        tarjeta_mask = "****"
+        saldo_actual = 0.00
+        if supabase:
+            res = supabase.table("clientes").select("id, saldo, numero_tarjeta_mask, estatus_tarjeta").eq("caller_id", caller_id).execute()
+            if res.data and len(res.data) > 0:
+                cliente_id = res.data[0].get("id")
+                estatus_actual = int(res.data[0].get("estatus_tarjeta", 1))
+                tarjeta_mask = res.data[0].get("numero_tarjeta_mask", "****")
+                saldo_actual = float(res.data[0].get("saldo", 0.00))
+
+        folio = f"CAN-{int(time.time() * 1000) % 1000000}"
+
+        if estatus_actual == 2:
+            prompt_msg = f"Su tarjeta con terminación {tarjeta_mask[-4:]} ya se encuentra previamente cancelada. Lo transferimos con un asesor para aclaraciones o reposición."
+        else:
+            # 1. Actualizar estatus_tarjeta a 2 en la tabla clientes
+            if supabase and cliente_id:
+                supabase.table("clientes").update({"estatus_tarjeta": 2}).eq("id", cliente_id).execute()
+                # 2. Registrar en tarjetas_cancelaciones_log (Auditoría)
+                supabase.table("tarjetas_cancelaciones_log").insert({
+                    "cliente_id": cliente_id,
+                    "folio_cancelacion": folio,
+                    "caller_id": caller_id,
+                    "numero_tarjeta_mask": tarjeta_mask,
+                    "estatus_anterior": 1,
+                    "estatus_nuevo": 2,
+                    "motivo": "Cancelación solicitada vía IVR Opción 2",
+                    "canal": "IVR_OPCION_2",
+                    "saldo_al_momento": saldo_actual
+                }).execute()
+
+            prompt_msg = f"Hemos registrado la cancelación de su tarjeta terminación {tarjeta_mask[-4:]} con folio {folio}. Para confirmar detalles o consultar alternativas, lo comunicamos con un asesor."
+
         if supabase:
             supabase.table("llamadas_bitacora").update({
                 "opcion_ivr_seleccionada": "2. Cancelación",
-                "resumen_ia": "El usuario seleccionó el proceso de cancelación en el IVR."
+                "resumen_ia": f"Solicitud de cancelación ejecutada vía IVR: Folio {folio}. Estatus tarjeta actualizado a 2 (Cancelada)."
             }).eq("caller_id", caller_id).execute()
 
         return {
             "action": "speak_and_transfer",
-            "prompt_text": "Hemos registrado su solicitud de cancelación. Para confirmar el proceso y ofrecerle una alternativa, lo comunicamos con un asesor de retenciones.",
-            "transfer_extension": "2001" # Extensión del agente en el CRM
+            "prompt_text": prompt_msg,
+            "folio_cancelacion": folio,
+            "estatus_tarjeta": 2,
+            "transfer_extension": "2001"
         }
 
     # Opción 3: Ventas

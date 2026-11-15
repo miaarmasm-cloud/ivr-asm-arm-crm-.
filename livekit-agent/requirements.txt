@@ -4,6 +4,8 @@ livekit-plugins-deepgram~=0.6.4
 livekit-plugins-elevenlabs~=0.6.5
 livekit-plugins-google~=0.6.2
 livekit-plugins-openai~=0.8.2
+livekit-plugins-assemblyai
+assemblyai>=0.30.0
 supabase==2.8.1
 pydantic==2.9.2
 python-dotenv==1.0.1

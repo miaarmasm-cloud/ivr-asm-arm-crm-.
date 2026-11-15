@@ -1,5 +1,14 @@
 import { NextResponse } from 'next/server';
 import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
+import { createGoogleCalendarEvent, deleteGoogleCalendarEvent } from '@/lib/googleCalendar';
+
+const DOCTOR_EMAILS: Record<string, string> = {
+  'Dra. Mariana Fernández': 'mariana.fernandez@clinica-arm.com',
+  'Dra. Mariana Gómez': 'mariana.gomez@clinica-arm.com',
+  'Dr. Fernando Fernández': 'fernando.fernandez@clinica-arm.com',
+  'Dr. Alejandro Morales': 'alejandro.morales@clinica-arm.com',
+  'Dra. Sofía Navarro': 'sofia.navarro@clinica-arm.com'
+};
 
 export async function GET(request: Request) {
   try {
@@ -50,7 +59,6 @@ export async function GET(request: Request) {
       // 3. Próxima fecha disponible para el médico de cabecera (día siguiente)
       const fechaObj = new Date(check_fecha + 'T00:00:00');
       fechaObj.setDate(fechaObj.getDate() + 1);
-      // Evitar fin de semana (0=Dom, 6=Sab)
       if (fechaObj.getDay() === 6) fechaObj.setDate(fechaObj.getDate() + 2);
       if (fechaObj.getDay() === 0) fechaObj.setDate(fechaObj.getDate() + 1);
       const diaSiguienteStr = fechaObj.toISOString().split('T')[0];
@@ -116,7 +124,7 @@ export async function POST(request: Request) {
       hora, 
       especialidad = 'Medicina General y Laboratorio', 
       motivo = 'Check-up y Consulta Preventiva', 
-      doctor_asignado = 'Dra. Mariana Gómez',
+      doctor_asignado = 'Dra. Mariana Fernández',
       notas_ia = 'Cita agendada por Agente Clínico IA Gemini'
     } = body;
 
@@ -129,19 +137,42 @@ export async function POST(request: Request) {
 
     const horaNorm = hora.substring(0, 5);
 
-    // Buscar si existe cliente_id vinculado a ese caller_id
+    // Buscar si existe cliente vinculado para obtener email
     let cliente_id = null;
+    let paciente_email = undefined;
     const { data: cliente } = await supabase
       .from('clientes')
-      .select('id')
+      .select('id, email')
       .eq('caller_id', caller_id)
       .maybeSingle();
 
     if (cliente) {
       cliente_id = cliente.id;
+      paciente_email = cliente.email;
     }
 
-    // 1. Insertar la cita médica en citas_calendario con formato normalizado
+    // 1. SINCRONIZAR CON GOOGLE CALENDAR EN TIEMPO REAL
+    let google_event_id: string | null = null;
+    try {
+      google_event_id = await createGoogleCalendarEvent({
+        caller_id,
+        paciente_nombre,
+        doctor_asignado,
+        fecha,
+        hora: horaNorm,
+        motivo,
+        paciente_email: paciente_email || 'anto.krpax@gmail.com',
+        doctor_email: DOCTOR_EMAILS[doctor_asignado] || 'miaarmasm@gmail.com'
+      });
+    } catch (gErr) {
+      console.warn('[Google Calendar Sync Warning]:', gErr);
+    }
+
+    const notasFinal = google_event_id 
+      ? `Google Calendar Event ID: ${google_event_id} | Sincronizado en Tiempo Real` 
+      : (notas_ia || 'Cita agendada en Supabase');
+
+    // 2. Insertar la cita médica en citas_calendario
     const { data: nuevaCita, error } = await supabase
       .from('citas_calendario')
       .insert({
@@ -154,7 +185,7 @@ export async function POST(request: Request) {
         motivo,
         estado: 'confirmada',
         doctor_asignado,
-        notas_ia
+        notas_ia: notasFinal
       })
       .select()
       .single();
@@ -163,19 +194,20 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // 2. Registrar en la bitácora de llamadas para notificación inmediata
+    // 3. Registrar en bitácora para Screen-Pop inmediato en CRM
     await supabase.from('llamadas_bitacora').insert({
       caller_id,
       tipo: 'entrante',
       estado: 'finalizada',
-      opcion_ivr_seleccionada: '4. Citas Médicas (Gemini IA)',
-      resumen_ia: `Cita médica confirmada para ${paciente_nombre}: ${especialidad} el ${fecha} a las ${horaNorm} hrs con ${doctor_asignado}. Motivo: ${motivo}.`,
-      notas_agente: `Agendado automáticamente por Agente IA Gemini en Opción 4.`
+      opcion_ivr_seleccionada: '2. Citas Médicas (Google Calendar Sync)',
+      resumen_ia: `Cita médica confirmada para ${paciente_nombre}: ${especialidad} el ${fecha} a las ${horaNorm} hrs con ${doctor_asignado}. Google Calendar ID: ${google_event_id || 'offline'}.`,
+      notas_agente: `Sincronización bidireccional completada con Google Calendar y Supabase.`
     });
 
     return NextResponse.json({
       success: true,
-      mensaje: 'Cita médica agendada exitosamente en el calendario',
+      mensaje: `Cita médica agendada exitosamente con ${doctor_asignado} y sincronizada con Google Calendar`,
+      google_event_id,
       cita: nuevaCita
     });
   } catch (err: any) {
@@ -190,6 +222,23 @@ export async function PATCH(request: Request) {
 
     if (!id) {
       return NextResponse.json({ error: 'Debe especificar el id de la cita' }, { status: 400 });
+    }
+
+    // Si se cancela la cita, remover el evento de Google Calendar
+    if (estado === 'cancelada') {
+      const { data: existing } = await supabase
+        .from('citas_calendario')
+        .select('notas_ia')
+        .eq('id', id)
+        .single();
+
+      if (existing?.notas_ia && existing.notas_ia.includes('Google Calendar Event ID: ')) {
+        const parts = existing.notas_ia.split('Google Calendar Event ID: ')[1].split(' ');
+        const eventId = parts[0]?.trim();
+        if (eventId && eventId !== 'offline') {
+          await deleteGoogleCalendarEvent(eventId);
+        }
+      }
     }
 
     const updatePayload: any = {};

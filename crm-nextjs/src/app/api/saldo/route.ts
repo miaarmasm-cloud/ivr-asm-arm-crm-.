@@ -31,7 +31,32 @@ export async function GET(request: Request) {
       );
     }
 
-    // Registrar consulta en bitácora
+    // VALIDACIÓN ESTÁNDAR: Si la tarjeta está cancelada (estatus 2), NO entregar saldo
+    if (data.estatus_tarjeta === 2) {
+      await supabase.from('llamadas_bitacora').insert({
+        caller_id: data.caller_id,
+        cliente_id: data.id,
+        tipo: 'entrante',
+        estado: 'en_curso',
+        opcion_ivr_seleccionada: '1. Consulta de Saldo DENEGADA',
+        resumen_ia: `Intento de consulta de saldo rechazado: Tarjeta ${data.numero_tarjeta_mask} se encuentra cancelada (Estatus 2).`
+      });
+
+      return NextResponse.json({
+        found: true,
+        caller_id: data.caller_id,
+        nombre_completo: data.nombre_completo,
+        numero_tarjeta_mask: data.numero_tarjeta_mask,
+        estatus_tarjeta: 2,
+        tarjeta_activa: false,
+        saldo_bloqueado: true,
+        mensaje: 'Tarjeta cancelada / bloqueada. Consulta de saldo no permitida en IVR.',
+        saldo: null,
+        saldo_formateado: 'NO DISPONIBLE (CANCELADA)'
+      });
+    }
+
+    // Registrar consulta en bitácora si la tarjeta está activa (estatus 1)
     await supabase.from('llamadas_bitacora').insert({
       caller_id: data.caller_id,
       cliente_id: data.id,
@@ -47,6 +72,8 @@ export async function GET(request: Request) {
       nombre_completo: data.nombre_completo,
       empresa: data.empresa,
       numero_tarjeta_mask: data.numero_tarjeta_mask,
+      estatus_tarjeta: data.estatus_tarjeta ?? 1,
+      tarjeta_activa: (data.estatus_tarjeta ?? 1) === 1,
       saldo: Number(data.saldo),
       saldo_formateado: `$${Number(data.saldo).toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN`,
       email: data.email
@@ -84,12 +111,29 @@ export async function POST(request: Request) {
       );
     }
 
+    if (data.estatus_tarjeta === 2) {
+      return NextResponse.json({
+        found: true,
+        caller_id: data.caller_id,
+        nombre_completo: data.nombre_completo,
+        numero_tarjeta_mask: data.numero_tarjeta_mask,
+        estatus_tarjeta: 2,
+        tarjeta_activa: false,
+        saldo_bloqueado: true,
+        mensaje: 'Tarjeta cancelada / bloqueada. Consulta de saldo no permitida.',
+        saldo: null,
+        saldo_formateado: 'NO DISPONIBLE (CANCELADA)'
+      });
+    }
+
     return NextResponse.json({
       found: true,
       caller_id: data.caller_id,
       nombre_completo: data.nombre_completo,
       empresa: data.empresa,
       numero_tarjeta_mask: data.numero_tarjeta_mask,
+      estatus_tarjeta: data.estatus_tarjeta ?? 1,
+      tarjeta_activa: (data.estatus_tarjeta ?? 1) === 1,
       saldo: Number(data.saldo),
       saldo_formateado: `$${Number(data.saldo).toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN`
     });

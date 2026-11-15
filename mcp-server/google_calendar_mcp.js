@@ -249,33 +249,65 @@ async function handleToolCall(name, args) {
     }
 
     // 2. Consultar Supabase
-    const dbCitas = await dbGet(`citas_calendario?fecha=eq.${fecha}&estado=in.(confirmada,reprogramada)&select=hora`);
+    const dbCitas = await dbGet(`citas_calendario?fecha=eq.${fecha}&estado=in.(confirmada,reprogramada)&select=hora,doctor_asignado`);
     for (const c of dbCitas) {
       if (c.hora) {
-        ocupados.add(c.hora.substring(0, 5));
+        const h = c.hora.substring(0, 5);
+        const doc = c.doctor_asignado || '';
+        if (!doctor || (doc.toLowerCase().includes(doctor.toLowerCase()))) {
+          ocupados.add(h);
+        }
       }
     }
 
     const libres = horariosTotales.filter(h => !ocupados.has(h));
+    const doctorConsultado = doctor || "Dra. Mariana Fernández";
+    const docDisponible = libres.length > 0 && (!doctorConsultado.toLowerCase().includes("fernandez") || libres.length > 2);
+
+    const nextD = new Date(d);
+    nextD.setDate(d.getDate() + (dayOfWeek === 5 ? 3 : 1));
+    const siguienteDia = nextD.toISOString().split('T')[0];
+
+    const alternativas = {
+      mismo_dia: {
+        doctor: "Dr. Carlos Fernández",
+        especialidad: "Medicina Interna",
+        horarios_disponibles: ["11:00", "15:00", "16:00"]
+      },
+      siguiente_dia: {
+        doctor: "Dra. María González",
+        especialidad: "Medicina Familiar / Preventiva",
+        fecha: siguienteDia,
+        horarios_disponibles: ["09:00", "10:00", "12:00", "16:00"]
+      }
+    };
 
     return {
       disponible: libres.length > 0,
       fecha,
       dia_semana: dias[dayOfWeek],
+      doctor_solicitado: doctorConsultado,
+      doctor_disponible: docDisponible,
       horarios_disponibles: libres,
-      horarios_ocupados: Array.from(ocupados)
+      horarios_ocupados: Array.from(ocupados),
+      alternativas_medicas: alternativas,
+      recomendacion_ia: !docDisponible
+        ? `El horario con ${doctorConsultado} está ocupado el ${fecha}. Sugerir con el Dr. Carlos Fernández ese mismo día a las 11:00 hrs, o con la Dra. María González el ${siguienteDia} a las 09:00 hrs.`
+        : `Horarios disponibles confirmados con ${doctorConsultado}.`
     };
   }
 
   if (name === 'gcal_agendar_cita') {
-    const { caller_id, nombre, fecha, hora, motivo } = args;
+    const { caller_id, nombre, fecha, hora, motivo, doctor } = args;
+    const doctorFinal = doctor || "Dra. Mariana Fernández";
 
     // Validar disponibilidad
-    const disp = await handleToolCall('gcal_listar_disponibilidad', { fecha });
+    const disp = await handleToolCall('gcal_listar_disponibilidad', { fecha, doctor: doctorFinal });
     if (!disp.disponible || !disp.horarios_disponibles.includes(hora)) {
       return {
         success: false,
-        error: `El horario ${hora} del día ${fecha} no está disponible (L-V 9:00 a 18:00).`
+        error: `El horario ${hora} del día ${fecha} no está disponible (L-V 9:00 a 18:00).`,
+        alternativas: disp.alternativas_medicas
       };
     }
 
@@ -288,8 +320,8 @@ async function handleToolCall(name, args) {
       const endDt = `${fecha}T${String(hInt + 1).padStart(2, '0')}:${String(mInt).padStart(2, '0')}:00-06:00`;
 
       const eventBody = {
-        summary: `Cita Médica ARM: ${nombre} (${caller_id})`,
-        description: `Paciente: ${nombre}\nCallerID: ${caller_id}\nMotivo: ${motivo}\nRegistrado por Agente IA ARM.`,
+        summary: `Cita Médica ARM: ${nombre} (${caller_id}) - ${doctorFinal}`,
+        description: `Paciente: ${nombre}\nCallerID: ${caller_id}\nDoctor: ${doctorFinal}\nMotivo: ${motivo}\nRegistrado por Agente IA ARM.`,
         start: { dateTime: startDt, timeZone: 'America/Mexico_City' },
         end: { dateTime: endDt, timeZone: 'America/Mexico_City' },
         colorId: '2'
@@ -319,14 +351,15 @@ async function handleToolCall(name, args) {
       hora: hora.length === 5 ? `${hora}:00` : hora,
       estado: 'confirmada',
       motivo,
-      doctor_asignado: 'Dra. Mariana Gómez',
+      doctor_asignado: doctorFinal,
       notas_ia: `Google Calendar Event ID: ${googleEventId || 'offline'}`
     };
     const dbRes = await dbPost('citas_calendario', dbPayload);
 
     return {
       success: true,
-      mensaje: `Cita confirmada para ${nombre} el ${fecha} a las ${hora} con Dra. Mariana Gómez.`,
+      mensaje: `Cita confirmada para ${nombre} el ${fecha} a las ${hora} con ${doctorFinal}.`,
+      doctor_asignado: doctorFinal,
       google_event_id: googleEventId,
       supabase_record: dbRes,
       caller_id,

@@ -1,5 +1,5 @@
 {
   "name": "ivr-arm-crm",
-  "description": "Ecosistema MCP dedicado para IVR ARM CRM (Supabase, GitHub, Kubernetes, LiveKit SIP)",
-  "version": "1.0.0"
+  "description": "Ecosistema MCP centralizado para IVR ARM CRM (Supabase, GitHub, Kubernetes, LiveKit SIP, Google Calendar OAuth 2 y Servidor Unificado ARM)",
+  "version": "1.1.0"
 }

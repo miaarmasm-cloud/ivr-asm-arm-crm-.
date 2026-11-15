@@ -159,6 +159,97 @@ def supabase_buscar_casos_cbr(problema_descripcion: str) -> Dict[str, Any]:
     return {"casos_encontrados": casos}
 
 
+@mcp.tool()
+def supabase_cancelar_tarjeta(caller_id: str, motivo: Optional[str] = "Cancelación solicitada por IVR/CRM") -> Dict[str, Any]:
+    """
+    Cancela la tarjeta bancaria del cliente con la nomenclatura oficial:
+    {YYYY-MM-DD}-{4_ultimos_tarjeta}-{4_ultimos_callerid}.
+    Actualiza clientes (estatus_tarjeta=2, folio_cancelacion, fecha_cancelacion, motivo_cancelacion),
+    registra en tarjetas_cancelaciones_log y en llamadas_bitacora para Screen-Pop inmediato en CRM.
+    """
+    clientes = db_get(f"clientes?caller_id=eq.{caller_id}&select=*")
+    if not clientes:
+        return {"success": False, "error": f"Cliente con CallerID {caller_id} no encontrado en Supabase."}
+
+    cli = clientes[0]
+    cliente_id = cli.get("id")
+    nombre = cli.get("nombre_completo", "Cliente")
+    mask = cli.get("numero_tarjeta_mask") or "8821"
+    saldo = cli.get("saldo", 0.0)
+
+    # 4 últimos dígitos de la tarjeta
+    digits_tarjeta = "".join([c for c in mask if c.isdigit()])
+    last4_tarjeta = digits_tarjeta[-4:] if len(digits_tarjeta) >= 4 else "8821"
+
+    # 4 últimos dígitos del CallerID
+    digits_caller = "".join([c for c in str(caller_id) if c.isdigit()])
+    last4_caller = digits_caller[-4:] if len(digits_caller) >= 4 else "1001"
+
+    fecha_hoy = datetime.date.today().isoformat()
+    folio = f"{fecha_hoy}-{last4_tarjeta}-{last4_caller}"
+    fecha_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    # 1. Actualizar tabla clientes
+    update_data = {
+        "estatus_tarjeta": 2,
+        "folio_cancelacion": folio,
+        "fecha_cancelacion": fecha_iso,
+        "motivo_cancelacion": motivo
+    }
+    db_patch(f"clientes?caller_id=eq.{caller_id}", update_data)
+
+    # 2. Registrar en tarjetas_cancelaciones_log
+    log_data = {
+        "cliente_id": cliente_id,
+        "caller_id": caller_id,
+        "folio_cancelacion": folio,
+        "saldo_al_cancelar": saldo,
+        "motivo": motivo,
+        "estatus": "completada"
+    }
+    db_post("tarjetas_cancelaciones_log", log_data)
+
+    # 3. Registrar en llamadas_bitacora para Screen-Pop en tiempo real en el CRM
+    bitacora_data = {
+        "caller_id": caller_id,
+        "cliente_id": cliente_id,
+        "tipo": "entrante",
+        "estado": "finalizada",
+        "opcion_ivr_seleccionada": "2",
+        "folio_cancelacion": folio,
+        "resumen_ia": f"Cancelación de tarjeta exitosa. Folio oficial: {folio}. Saldo protegido: ${saldo:,.2f} MXN.",
+        "notas_agente": f"Folio de cancelación emitido: {folio}"
+    }
+    db_post("llamadas_bitacora", bitacora_data)
+
+    return {
+        "success": True,
+        "folio_cancelacion": folio,
+        "cliente": nombre,
+        "tarjeta_mask": mask,
+        "saldo_protegido": saldo,
+        "fecha_cancelacion": fecha_hoy,
+        "mensaje": f"Tarjeta terminada en {last4_tarjeta} cancelada con éxito. Folio oficial: {folio}."
+    }
+
+
+@mcp.tool()
+def supabase_consultar_cancelacion(folio: str) -> Dict[str, Any]:
+    """
+    Consulta en el CRM / Supabase el estatus de una cancelación mediante su folio oficial
+    con formato YYYY-MM-DD-4tarjeta-4callerid.
+    """
+    rows = db_get(f"clientes?folio_cancelacion=eq.{folio}&select=nombre_completo,caller_id,numero_tarjeta_mask,saldo,folio_cancelacion,fecha_cancelacion,motivo_cancelacion,estatus_tarjeta")
+    if rows:
+        return {"encontrado": True, "tipo": "cliente", "datos": rows[0]}
+
+    logs = db_get(f"tarjetas_cancelaciones_log?folio_cancelacion=eq.{folio}&select=*")
+    if logs:
+        return {"encontrado": True, "tipo": "log_cancelacion", "datos": logs[0]}
+
+    return {"encontrado": False, "mensaje": f"No se encontró registro para el folio {folio}."}
+
+
 # =============================================================================
 # 2. SERVICIOS DE LIVEKIT (TELEFONÍA SIP, SALAS Y OUTBOUND)
 # =============================================================================
@@ -224,10 +315,13 @@ def github_estado_repositorio() -> Dict[str, Any]:
 # =============================================================================
 
 @mcp.tool()
-def gcal_listar_disponibilidad(fecha: str) -> Dict[str, Any]:
+def gcal_listar_disponibilidad(fecha: str, doctor: Optional[str] = None) -> Dict[str, Any]:
     """
     Verifica los horarios disponibles para una fecha (formato YYYY-MM-DD).
     Valida rango de 9:00 AM a 6:00 PM de Lunes a Viernes.
+    Si se especifica un médico de cabecera (ej. 'Dra. Mariana Fernández'), valida su agenda
+    y en caso de no tener cupo ofrece alternativas de doctores disponibles (ej. 'Dr. Carlos Fernández'
+    para ese mismo día o 'Dra. María González' para el día siguiente).
     """
     try:
         dt = datetime.datetime.strptime(fecha, "%Y-%m-%d")
@@ -267,40 +361,75 @@ def gcal_listar_disponibilidad(fecha: str) -> Dict[str, Any]:
             sys.stderr.write(f"[Google Calendar Query Error] {e}\n")
 
     # Verificar citas activas en Supabase
-    citas_db = db_get(f"citas_calendario?fecha=eq.{fecha}&estado=in.(confirmada,reprogramada)&select=hora")
+    citas_query = f"citas_calendario?fecha=eq.{fecha}&estado=in.(confirmada,reprogramada)&select=hora,doctor_asignado"
+    citas_db = db_get(citas_query)
     for r in citas_db:
         hora_str = str(r.get("hora", ""))[:5]
-        horarios_ocupados.add(hora_str)
+        doc_asignado = r.get("doctor_asignado", "")
+        if not doctor or (doctor.lower() in doc_asignado.lower()):
+            horarios_ocupados.add(hora_str)
 
     libres = [h for h in horarios_totales if h not in horarios_ocupados]
+
+    # Simulación de disponibilidad de médicos de cabecera si se requiere validación médica
+    doctor_consultado = doctor or "Dra. Mariana Fernández"
+    # Si la doctora de cabecera está llena en la fecha solicitada
+    doc_disponible = len(libres) > 0 and (doctor_consultado.lower() not in ["dra. mariana fernández", "dra. fernandez"] or len(libres) > 2)
+
+    siguiente_dia = (dt + datetime.timedelta(days=1 if dt.weekday() < 4 else 3)).strftime("%Y-%m-%d")
+
+    alternativas = {
+        "mismo_dia": {
+            "doctor": "Dr. Carlos Fernández",
+            "especialidad": "Medicina Interna",
+            "horarios_disponibles": ["11:00", "15:00", "16:00"]
+        },
+        "siguiente_dia": {
+            "doctor": "Dra. María González",
+            "especialidad": "Medicina Familiar / Preventiva",
+            "fecha": siguiente_dia,
+            "horarios_disponibles": ["09:00", "10:00", "12:00", "16:00"]
+        }
+    }
 
     return {
         "disponible": len(libres) > 0,
         "fecha": fecha,
         "dia_semana": ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes"][dt.weekday()],
+        "doctor_solicitado": doctor_consultado,
+        "doctor_disponible": doc_disponible,
         "horarios_disponibles": libres,
-        "horarios_ocupados": list(horarios_ocupados)
+        "horarios_ocupados": list(horarios_ocupados),
+        "alternativas_medicas": alternativas,
+        "recomendacion_ia": (
+            f"El horario con {doctor_consultado} está ocupado el {fecha}. "
+            f"Sugerir con el Dr. Carlos Fernández ese mismo día a las 11:00 hrs, o con la Dra. María González el {siguiente_dia} a las 09:00 hrs."
+            if not doc_disponible else f"Horarios disponibles confirmados con {doctor_consultado}."
+        )
     }
 
 
 @mcp.tool()
-def gcal_agendar_cita(caller_id: str, nombre: str, fecha: str, hora: str, motivo: str) -> Dict[str, Any]:
+def gcal_agendar_cita(caller_id: str, nombre: str, fecha: str, hora: str, motivo: str, doctor: Optional[str] = "Dra. Mariana Fernández") -> Dict[str, Any]:
     """
-    Agenda una nueva cita médica sincronizando Google Calendar y Supabase.
+    Agenda una nueva cita médica sincronizando Google Calendar y Supabase con el doctor asignado.
     Parámetros:
       caller_id: Identificador del paciente.
       nombre: Nombre del paciente.
       fecha: YYYY-MM-DD
       hora: HH:MM (9:00 a 17:00)
       motivo: Diagnóstico o chequeo solicitado.
+      doctor: Nombre del médico (ej. Dra. Mariana Fernández, Dr. Carlos Fernández, Dra. María González).
     """
-    disp = gcal_listar_disponibilidad(fecha)
+    disp = gcal_listar_disponibilidad(fecha, doctor)
     if not disp.get("disponible") or hora not in disp.get("horarios_disponibles", []):
         return {
             "success": False,
-            "error": f"El horario {hora} del dia {fecha} no esta disponible o fuera de horario (L-V 9:00 a 18:00)."
+            "error": f"El horario {hora} del dia {fecha} no esta disponible o fuera de horario (L-V 9:00 a 18:00).",
+            "alternativas": disp.get("alternativas_medicas")
         }
 
+    doctor_final = doctor or "Dra. Mariana Fernández"
     google_event_id = None
     service = get_calendar_service()
     if service:
@@ -311,8 +440,8 @@ def gcal_agendar_cita(caller_id: str, nombre: str, fecha: str, hora: str, motivo
             end_dt = f"{fecha}T{(h_int+1):02d}:{m_int:02d}:00-06:00"
 
             event_body = {
-                'summary': f"Cita Médica ARM: {nombre} ({caller_id})",
-                'description': f"Paciente: {nombre}\nCallerID: {caller_id}\nMotivo: {motivo}\nRegistrado por Agente IA ARM.",
+                'summary': f"Cita Médica ARM: {nombre} ({caller_id}) - {doctor_final}",
+                'description': f"Paciente: {nombre}\nCallerID: {caller_id}\nDoctor: {doctor_final}\nMotivo: {motivo}\nRegistrado por Agente IA ARM.",
                 'start': {'dateTime': start_dt, 'timeZone': 'America/Mexico_City'},
                 'end': {'dateTime': end_dt, 'timeZone': 'America/Mexico_City'},
                 'colorId': '2'
@@ -330,14 +459,15 @@ def gcal_agendar_cita(caller_id: str, nombre: str, fecha: str, hora: str, motivo
         "hora": f"{hora}:00" if len(hora) == 5 else hora,
         "estado": "confirmada",
         "motivo": motivo,
-        "doctor_asignado": "Dra. Mariana Gómez",
+        "doctor_asignado": doctor_final,
         "notas_ia": f"Google Calendar Event ID: {google_event_id or 'offline'}"
     }
     inserted = db_post("citas_calendario", row)
 
     return {
         "success": True,
-        "mensaje": f"Cita confirmada para {nombre} el {fecha} a las {hora} con Dra. Mariana Gómez.",
+        "mensaje": f"Cita confirmada para {nombre} el {fecha} a las {hora} con {doctor_final}.",
+        "doctor_asignado": doctor_final,
         "google_event_id": google_event_id,
         "supabase_record": inserted,
         "caller_id": caller_id,

@@ -6,6 +6,10 @@ export interface Customer {
   direccion: string;
   numero_tarjeta_mask: string;
   saldo: number;
+  estatus_tarjeta?: number; // 1: Activa, 2: Cancelada/Bloqueada
+  folio_cancelacion?: string; // Folio Oficial de Cancelación YYYY-MM-DD-XXXX-YYYY
+  fecha_cancelacion?: string;
+  motivo_cancelacion?: string;
   email: string;
   telefonos_adicionales: string[];
   fecha_nacimiento: string;
@@ -25,11 +29,26 @@ export interface CallLog {
   estado?: 'en_curso' | 'finalizada' | 'perdida' | 'transferida';
   duracion_segundos: number;
   opcion_ivr_seleccionada?: string;
+  folio_cancelacion?: string;
   transcripcion_texto?: string;
   resumen_ia?: string;
   notas_agente?: string;
   grabacion_url?: string;
   fecha_hora: string;
+}
+
+export interface CancelacionLog {
+  id: string;
+  cliente_id: string;
+  folio_cancelacion: string;
+  caller_id: string;
+  numero_tarjeta_mask: string;
+  estatus_anterior: number;
+  estatus_nuevo: number;
+  motivo: string;
+  canal: string;
+  saldo_al_momento: number;
+  created_at: string;
 }
 
 export interface OrderDelivery {
@@ -43,4 +62,47 @@ export interface OrderDelivery {
   estado_entrega: 'En preparación' | 'En ruta' | 'Entregado' | 'Reprogramado' | 'Cancelado';
   notificado_al_cliente: boolean;
   notas_entrega?: string;
+}
+
+// Modelos para el Módulo de Consultas y Citas Médicas (Opción 4 IVR)
+export interface CitaMedica {
+  id: string;
+  caller_id: string;
+  cliente_id?: string | null;
+  paciente_nombre: string;
+  fecha: string; // YYYY-MM-DD
+  hora: string;  // HH:MM
+  especialidad: string;
+  motivo: string;
+  estado: 'confirmada' | 'cancelada' | 'en_espera' | 'completada';
+  doctor_asignado?: string;
+  notas_ia?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface HistorialClinico {
+  id: string;
+  caller_id: string;
+  cliente_id?: string | null;
+  paciente_nombre: string;
+  fecha_ultima_consulta: string;
+  ultimo_motivo: string;
+  diagnostico_previo: string;
+  sugerencia_preventiva_ia: string;
+  doctor_asignado?: string;
+  created_at?: string;
+}
+
+export interface CbrCaso {
+  id: string;
+  categoria: string;
+  caller_id?: string;
+  paciente_nombre?: string;
+  problema_descripcion: string;
+  solucion_aplicada?: string;
+  resolucion_exitosa: boolean;
+  veces_utilizado?: number;
+  estado?: 'pendiente_humano' | 'resuelto_entrenado';
+  created_at?: string;
 }

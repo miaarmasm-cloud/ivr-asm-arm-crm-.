@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS clientes (
     direccion TEXT,
     numero_tarjeta_mask VARCHAR(25), -- Ejemplo: '**** **** **** 4242'
     saldo NUMERIC(12, 2) DEFAULT 0.00,
+    estatus_tarjeta SMALLINT DEFAULT 1 CHECK (estatus_tarjeta IN (1, 2)), -- 1: Activa, 2: Cancelada/Bloqueada
     email VARCHAR(120),
     telefonos_adicionales JSONB DEFAULT '[]'::jsonb, -- Array de strings con otros números
     fecha_nacimiento DATE,
@@ -74,6 +75,23 @@ CREATE TABLE IF NOT EXISTS cbr_casos (
     embedding vector(1536), -- Vector para similitud de coseno
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- 5. TABLA: AUDITORÍA DE CANCELACIONES Y REACTIVACIONES DE TARJETA
+CREATE TABLE IF NOT EXISTS tarjetas_cancelaciones_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cliente_id UUID REFERENCES clientes(id) ON DELETE CASCADE,
+    folio_cancelacion VARCHAR(50) NOT NULL,
+    caller_id VARCHAR(25) NOT NULL,
+    numero_tarjeta_mask VARCHAR(25) NOT NULL,
+    estatus_anterior SMALLINT NOT NULL,
+    estatus_nuevo SMALLINT NOT NULL, -- 1: Activa, 2: Cancelada
+    motivo TEXT DEFAULT 'Cambio de estatus',
+    canal VARCHAR(30) DEFAULT 'CRM_AGENTE', -- 'IVR_OPCION_2', 'CRM_AGENTE'
+    saldo_al_momento NUMERIC(12, 2) DEFAULT 0.00,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cancelaciones_cliente ON tarjetas_cancelaciones_log(cliente_id);
 
 -- =========================================================================
 -- DATOS SEMILLA (SEED DATA) PARA PRUEBAS INMEDIATAS CON SOFTPHONE

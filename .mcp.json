@@ -1,12 +1,20 @@
 {
   "mcpServers": {
     "servidor-mcp-arm-asm": {
-      "command": "python",
-      "args": ["mcp-server/servidor_mcp_arm.py"],
+      "command": "C:/Users/ecybe/AppData/Local/Programs/Python/Python312/python.exe",
+      "args": [
+        "C:/Users/ecybe/OneDrive/Documentos/Ivr Arm Crm Arm/mcp-server/servidor_mcp_arm.py"
+      ],
       "env": {
         "SUPABASE_URL": "https://xlmrmdxtrdomtrmnczwh.supabase.co",
         "GITHUB_REPO": "miaarmasm-cloud/ivr-asm-arm-crm-."
       }
+    },
+    "google-calendar": {
+      "command": "node",
+      "args": [
+        "C:/Users/ecybe/OneDrive/Documentos/Ivr Arm Crm Arm/mcp-server/google_calendar_mcp.js"
+      ]
     }
   }
 }

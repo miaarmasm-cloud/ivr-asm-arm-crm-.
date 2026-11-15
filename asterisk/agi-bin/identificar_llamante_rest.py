@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
 """
 =============================================================================
-ASTERISK 20 AGI: IDENTIFICADOR DE LLAMANTE (LEAD CONOCIDO VS NUEVO)
+ASTERISK 20 AGI: IDENTIFICADOR DE LLAMANTE, ADN ÚNICO Y ENRUTADOR DE CAMPAÑAS
 =============================================================================
-1. Extrae el CALLERID(num) de la llamada entrante.
-2. Consulta Supabase REST API en milisegundos.
-3. Si el cliente existe:
-   - Saludo personalizado: "Hola Carlos, bienvenido..."
-   - Exporta variables al canal de Asterisk: ES_CLIENTE=1, NOMBRE, SALDO, TARJETA.
-4. Si es un nuevo lead / desconocido:
-   - Saludo genérico: "Bienvenido a nuestro sistema inteligente..."
-   - Exporta variables: ES_CLIENTE=0.
-5. Menú de 4 opciones:
-   - 1: Saldo
-   - 2: Cancelación
-   - 3: Ventas
-   - 4: Citas médicas y agenda preventiva
-6. Soporte de interrupción inmediata (Barge-in con dígitos 1234).
+1. Homologación de ID Único e Irrepetible (UUID / ADN de llamada) para llamadas
+   entrantes y salientes, asociado al CallerID y al Cliente ID de Supabase.
+2. Segmentación de Campañas por DID (Atención Clientes, Doctores, Ventas, Cancelaciones).
+3. Enrutamiento dinámico según opciones autorizadas de cada campaña.
+4. Generación de nombre homologado de grabación: rec_<CALL_UUID>.wav.
+5. Soporte de Barge-in DTMF y síntesis neuronal de voz.
 =============================================================================
 """
 
@@ -64,7 +56,42 @@ def leer_variables_agi():
             agi_env[k.strip()] = v.strip()
     return agi_env
 
+def consultar_campana_por_did(did):
+    """Consulta la tabla campanas en Supabase y determina a qué campaña pertenece el DID."""
+    if not did:
+        did = "8000"
+    url = f"{SUPABASE_URL}/rest/v1/campanas?select=*&activo=eq.true"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            if resp.status == 200:
+                campanas = json.loads(resp.read().decode())
+                for camp in campanas:
+                    if str(camp.get("did_campana")) == str(did):
+                        return camp
+                    dids = camp.get("dids_asociados") or []
+                    if str(did) in [str(d) for d in dids]:
+                        return camp
+    except Exception as e:
+        sys.stderr.write(f"Error consultando campanas en Supabase: {e}\n")
+
+    # Fallback predeterminado: Atención a Clientes General
+    return {
+        "nombre": "Atención a Clientes General",
+        "slug": "atencion_clientes",
+        "opciones_permitidas": ["1", "2", "3", "4"],
+        "extension_agente": "2001",
+        "dids_asociados": ["8009990000", "5550001000", "8000"],
+        "enrutamiento_directo": None
+    }
+
 def consultar_cliente_por_callerid(caller_id):
+    """Obtiene el cliente de Supabase por su CallerID (incluyendo su UUID 'id')."""
     if not caller_id:
         return None
     url = f"{SUPABASE_URL}/rest/v1/clientes?caller_id=eq.{caller_id}&select=*"
@@ -84,8 +111,64 @@ def consultar_cliente_por_callerid(caller_id):
         sys.stderr.write(f"Error consultando caller_id: {e}\n")
     return None
 
+def registrar_inicio_llamada_bitacora(caller_id, cliente_id, did_marcado, campana, nombre_cliente=None):
+    """Crea el registro de la llamada en Supabase y retorna el UUID único (ADN de la llamada)."""
+    url = f"{SUPABASE_URL}/rest/v1/llamadas_bitacora"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+    payload = {
+        "caller_id": caller_id or "Desconocido",
+        "cliente_id": cliente_id,
+        "tipo": "entrante",
+        "estado": "en_curso",
+        "campana": campana.get("slug", "atencion_clientes"),
+        "did_marcado": did_marcado,
+        "opcion_ivr_seleccionada": f"Inicio IVR - {campana.get('nombre')}",
+        "resumen_ia": f"Llamada entrante de {nombre_cliente or caller_id} al DID {did_marcado} asignado a {campana.get('nombre')}.",
+        "notas_agente": f"Campaña: {campana.get('nombre')} | Agente asignado: Ext {campana.get('extension_agente')}"
+    }
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            if resp.status in (200, 201):
+                res_data = json.loads(resp.read().decode())
+                if res_data and len(res_data) > 0:
+                    call_uuid = res_data[0].get("id")
+                    # Homologar nombre de la grabación con el UUID
+                    grabacion_homologada = f"/var/spool/asterisk/monitor/rec_{call_uuid}.wav"
+                    actualizar_grabacion_url(call_uuid, grabacion_homologada)
+                    return call_uuid, grabacion_homologada
+    except Exception as e:
+        sys.stderr.write(f"Error creando registro en llamadas_bitacora: {e}\n")
+
+    # Fallback UUID local si no hubiese conexión
+    ts = int(time.time() * 1000)
+    fake_uuid = f"call-in-{ts}-{caller_id}"
+    return fake_uuid, f"/var/spool/asterisk/monitor/rec_{fake_uuid}.wav"
+
+def actualizar_grabacion_url(call_uuid, grabacion_url):
+    """Actualiza la URL homologada de la grabación para este UUID."""
+    url = f"{SUPABASE_URL}/rest/v1/llamadas_bitacora?id=eq.{call_uuid}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+    payload = {"grabacion_url": grabacion_url}
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="PATCH")
+        with urllib.request.urlopen(req, timeout=3):
+            pass
+    except Exception:
+        pass
+
 def sintetizar_voz(texto, output_wav):
-    # 1. Si el usuario configuró ElevenLabs con API Key
+    """Genera audio con voz humana (ElevenLabs o Microsoft Edge-TTS)."""
     if ELEVENLABS_API_KEY:
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
         headers = {
@@ -112,8 +195,7 @@ def sintetizar_voz(texto, output_wav):
         except Exception as e:
             sys.stderr.write(f"Fallo ElevenLabs: {e}\n")
 
-    # 2. MOTOR NEURAL DE VOZ HUMANA 100% GRATIS (Microsoft Azure Speech Neural)
-    # Voz: es-MX-DaliaNeural (Voz femenina mexicana natural, fluida y expresiva)
+    # Motor Edge-TTS Dalia Neural
     tmp_edge_mp3 = f"/tmp/edge_{int(time.time()*1000)}.mp3"
     try:
         cmd_edge = [
@@ -131,7 +213,7 @@ def sintetizar_voz(texto, output_wav):
     except Exception as e:
         sys.stderr.write(f"Fallo Edge-TTS: {e}\n")
 
-    # 3. Fallback local rápido
+    # Fallback local
     raw_wav = f"{output_wav}.raw.wav"
     try:
         subprocess.run(["espeak-ng", "-v", "es-la", "-s", "140", "-w", raw_wav, texto], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -145,38 +227,124 @@ def sintetizar_voz(texto, output_wav):
 def main():
     agi_env = leer_variables_agi()
     caller_id = sys.argv[1] if len(sys.argv) > 1 else agi_env.get("agi_callerid", "")
+    did_marcado = sys.argv[2] if len(sys.argv) > 2 else agi_env.get("agi_extension", "8000")
 
+    # 1. Resolver Campaña por DID
+    campana = consultar_campana_por_did(did_marcado)
+    campana_slug = campana.get("slug", "atencion_clientes")
+    campana_nombre = campana.get("nombre", "Atención General")
+    extension_agente = campana.get("extension_agente", "2001")
+    enrutamiento_directo = campana.get("enrutamiento_directo")
+
+    # 2. Consultar Cliente por CallerID
     cliente = consultar_cliente_por_callerid(caller_id)
+    cliente_id = cliente.get("id") if cliente else None
+    nombre_completo = cliente.get("nombre_completo", "") if cliente else ""
+    primer_nombre = nombre_completo.split()[0] if nombre_completo else ""
 
-    unique_id = int(time.time() * 1000)
-    audio_path = f"/tmp/greeting_{unique_id}.wav"
-    audio_base = f"/tmp/greeting_{unique_id}"
+    # 3. REGISTRAR LLAMADA Y OBTENER EL ID ÚNICO E IRREPETIBLE (ADN DE LA LLAMADA)
+    call_uuid, grabacion_url = registrar_inicio_llamada_bitacora(
+        caller_id=caller_id,
+        cliente_id=cliente_id,
+        did_marcado=did_marcado,
+        campana=campana,
+        nombre_cliente=nombre_completo
+    )
+
+    # 4. EXPORTAR VARIABLES AL CANAL DE ASTERISK (Con __ para herencia universal a Pata B)
+    agi_cmd(f'SET VARIABLE __CALL_UUID "{call_uuid}"')
+    agi_cmd(f'SET VARIABLE __CALL_RECORDING "{grabacion_url}"')
+    agi_cmd(f'SET VARIABLE __CLIENTE_ID "{cliente_id or ""}"')
+    agi_cmd(f'SET VARIABLE __CAMPANA "{campana_slug}"')
+    agi_cmd(f'SET VARIABLE __CAMPANA_NOMBRE "{campana_nombre}"')
+    agi_cmd(f'SET VARIABLE EXT_AGENTE_CAMPANA "{extension_agente}"')
+    agi_cmd(f'SET VARIABLE ENRUTAR_DIRECTO "{enrutamiento_directo or ""}"')
 
     if cliente:
-        nombre_completo = cliente.get("nombre_completo", "Carlos")
-        primer_nombre = nombre_completo.split()[0]
         saldo = float(cliente.get("saldo", 0.0))
         tarjeta_mask = cliente.get("numero_tarjeta_mask", "")
+        estatus = int(cliente.get("estatus_tarjeta", 1))
 
-        # Exportar variables al canal de Asterisk
         agi_cmd('SET VARIABLE ES_CLIENTE "1"')
         agi_cmd(f'SET VARIABLE NOMBRE_CLIENTE "{primer_nombre}"')
         agi_cmd(f'SET VARIABLE NOMBRE_COMPLETO "{nombre_completo}"')
         agi_cmd(f'SET VARIABLE SALDO_CLIENTE "{saldo:.2f}"')
         agi_cmd(f'SET VARIABLE TARJETA_MASK "{tarjeta_mask}"')
-
-        texto_saludo = (
-            f"Hola {primer_nombre}, bienvenido a tu sistema inteligente ARM. "
-            f"Marque 1 para consultar su saldo. "
-            f"Marque 2 para cancelación. "
-            f"Marque 3 para comunicarse con una ejecutiva de ventas. "
-            f"O marque 4 para agendar o consultar sus citas médicas."
-        )
+        agi_cmd(f'SET VARIABLE ESTATUS_TARJETA "{estatus}"')
     else:
-        # Lead nuevo o caller_id no registrado en la base
         agi_cmd('SET VARIABLE ES_CLIENTE "0"')
         agi_cmd('SET VARIABLE NOMBRE_CLIENTE ""')
 
+    # Iniciar grabación en Asterisk con el nombre homologado
+    agi_cmd(f'EXEC MixMonitor "{grabacion_url},b"')
+
+    # 5. GENERAR SPEECH Y ENRUTAR SEGÚN LA CAMPAÑA
+    unique_ts = int(time.time() * 1000)
+    audio_path = f"/tmp/greeting_{unique_ts}.wav"
+    audio_base = f"/tmp/greeting_{unique_ts}"
+
+    # CASO A: CAMPAÑA DE DOCTORES / CITAS MÉDICAS (Opción 4 directa)
+    if enrutamiento_directo == "4" or campana_slug == "doctores":
+        texto_saludo = (
+            f"Hola {primer_nombre + ', ' if primer_nombre else ''}"
+            f"bienvenido a la línea directa de atención médica y consultas con Inteligencia Artificial. "
+            f"Lo comunicamos de inmediato con su asistente de salud."
+        )
+        sintetizar_voz(texto_saludo, audio_path)
+        if os.path.exists(audio_path):
+            agi_cmd(f'STREAM FILE "{audio_base}" ""')
+            try:
+                os.remove(audio_path)
+            except Exception:
+                pass
+        agi_cmd('SET EXTENSION 4')
+        agi_cmd('SET PRIORITY 1')
+        return
+
+    # CASO B: CAMPAÑA DE VENTAS (Opción 3 directa)
+    if enrutamiento_directo == "3" or campana_slug == "ventas":
+        texto_saludo = (
+            f"Hola {primer_nombre + ', ' if primer_nombre else ''}"
+            f"bienvenido al departamento comercial y ventas. Conectando con su ejecutiva asignada."
+        )
+        sintetizar_voz(texto_saludo, audio_path)
+        if os.path.exists(audio_path):
+            agi_cmd(f'STREAM FILE "{audio_base}" ""')
+            try:
+                os.remove(audio_path)
+            except Exception:
+                pass
+        agi_cmd('SET EXTENSION 3')
+        agi_cmd('SET PRIORITY 1')
+        return
+
+    # CASO C: CAMPAÑA DE CANCELACIONES (Opción 2 directa)
+    if enrutamiento_directo == "2" or campana_slug == "cancelaciones":
+        texto_saludo = (
+            f"Hola {primer_nombre + ', ' if primer_nombre else ''}"
+            f"ha ingresado al departamento de gestión y cancelación de tarjetas. Procesando su solicitud."
+        )
+        sintetizar_voz(texto_saludo, audio_path)
+        if os.path.exists(audio_path):
+            agi_cmd(f'STREAM FILE "{audio_base}" ""')
+            try:
+                os.remove(audio_path)
+            except Exception:
+                pass
+        agi_cmd('SET EXTENSION 2')
+        agi_cmd('SET PRIORITY 1')
+        return
+
+    # CASO D: CAMPAÑA DE ATENCIÓN A CLIENTES GENERAL (Opciones 1, 2, 3, 4)
+    if cliente:
+        texto_saludo = (
+            f"Hola {primer_nombre}, bienvenido a su sistema inteligente ARM. "
+            f"Marque 1 para consultar su saldo. "
+            f"Marque 2 para cancelación. "
+            f"Marque 3 para comunicarse con ventas. "
+            f"O marque 4 para agendar o consultar sus citas médicas."
+        )
+    else:
         texto_saludo = (
             "Bienvenido al sistema inteligente de atención a clientes. "
             "Marque 1 para consultar su saldo. "
@@ -197,21 +365,17 @@ def main():
     else:
         res = agi_cmd('STREAM FILE "ivr-bienvenida-menu" "1234"')
 
-    # Soporte completo de Barge-in (Interrupción anticipada por DTMF)
+    # Soporte completo de Barge-in DTMF
     if "result=49" in res:
-        # Pulsó '1' durante la bienvenida
         agi_cmd('SET EXTENSION 1')
         agi_cmd('SET PRIORITY 1')
     elif "result=50" in res:
-        # Pulsó '2' durante la bienvenida
         agi_cmd('SET EXTENSION 2')
         agi_cmd('SET PRIORITY 1')
     elif "result=51" in res:
-        # Pulsó '3' durante la bienvenida
         agi_cmd('SET EXTENSION 3')
         agi_cmd('SET PRIORITY 1')
     elif "result=52" in res:
-        # Pulsó '4' durante la bienvenida
         agi_cmd('SET EXTENSION 4')
         agi_cmd('SET PRIORITY 1')
 

@@ -1,16 +1,12 @@
 """
 =============================================================================
-LIVEKIT AGENT: IVR / ARM CON DTMF, VOZ ELEVENLABS Y CBR EN SUPABASE
+LIVEKIT AGENT: IVR / ARM HOMOLOGADO CON EL DIALPLAN DE ASTERISK 20
 =============================================================================
-- Protocolo: SIP Ingress de LiveKit (Zoiper/Softphone -> SIP 5060 -> LiveKit Room)
-- Identificador Primario: CallerID (número del cliente)
-- Detección de Voz: Silero VAD (local, costo cero)
-- Transcripción STT: Deepgram Nova-2 (Español)
-- Síntesis TTS: ElevenLabs Multilingual v2 (Voz humana ultra-realista)
-- Cerebro LLM: Gemini 2.0 Flash / GPT-4o-mini
-- Memoria CBR: Búsqueda de casos previos en Supabase con pgvector
-- Entrada Dual: Voz natural + Teclado DTMF (1: Saldo, 2: Cancelación, 3: Humano)
-- Integración CRM: Inserta registro en 'llamadas_bitacora' para Screen-Pop inmediato
+MENÚ ESTÁNDAR HOMOLOGADO DEL IVR (DTMF Y VOZ):
+  1: Consulta de Saldo y Tarjeta
+  2: Cancelación de Tarjeta con generación de Folio oficial
+  3: Ventas y Transferencia a Ejecutiva Humana (Ext. 2001)
+  4: Citas Médicas Autónomas (Google Calendar API + Memoria Clínica CBR)
 =============================================================================
 """
 
@@ -30,31 +26,32 @@ from livekit.agents import (
 )
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, elevenlabs, silero, google, openai
+
+try:
+    from livekit.plugins import assemblyai
+    has_assemblyai = True
+except ImportError:
+    has_assemblyai = False
+
 from supabase import create_client, Client
 from mcp_bridge import MCPBridge
 
 load_dotenv()
-logger = logging.getLogger("ivr-arm-agent")
+logger = logging.getLogger("ivr-arm-homologado")
 logging.basicConfig(level=logging.INFO)
 
-# Inicializar cliente del Servidor MCP
 mcp_bridge = MCPBridge()
 
-# Configuración de Clientes
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "your-key")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://xlmrmdxtrdomtrmnczwh.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", os.getenv("SUPABASE_KEY", ""))
 
 supabase: Client = None
 try:
-    if SUPABASE_URL and "your-project" not in SUPABASE_URL:
+    if SUPABASE_URL and "tu-proyecto" not in SUPABASE_URL and SUPABASE_KEY:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
-    logger.warning(f"Supabase en modo offline/mock: {e}")
+    logger.warning(f"Supabase offline/mock: {e}")
 
-
-# =============================================================================
-# HERRAMIENTAS (FUNCTION CALLING) PARA EL AGENTE ARM CON CBR
-# =============================================================================
 
 class IVRFunctionContext(llm.FunctionContext):
     def __init__(self, caller_id: str, cliente_data: dict, ctx: JobContext):
@@ -63,88 +60,93 @@ class IVRFunctionContext(llm.FunctionContext):
         self.cliente_data = cliente_data
         self.ctx = ctx
 
-    @llm.ai_callable(description="Consulta el saldo disponible del cliente y los últimos 4 dígitos de su tarjeta.")
+    @llm.ai_callable(description="Opción 1: Consulta el saldo disponible y últimos 4 dígitos de tarjeta.")
     async def consultar_saldo(self) -> str:
         saldo = self.cliente_data.get("saldo", 0.0) if self.cliente_data else 0.0
         tarjeta = self.cliente_data.get("numero_tarjeta_mask", "****") if self.cliente_data else "****"
-        
-        # Registrar en la bitácora
         if supabase:
             supabase.table("llamadas_bitacora").update({
                 "opcion_ivr_seleccionada": "1. Consulta de Saldo",
-                "resumen_ia": f"Saldo consultado: ${saldo:.2f} MXN en tarjeta {tarjeta[-4:]}."
+                "resumen_ia": f"Consulta exitosa: Saldo ${saldo:.2f} MXN en tarjeta {tarjeta[-4:]}."
+            }).eq("caller_id", self.caller_id).execute()
+        return f"Su saldo disponible es de ${saldo:.2f} pesos en su tarjeta terminación {tarjeta[-4:]}."
+
+    @llm.ai_callable(description="Opción 2: Procesa la cancelación de tarjeta y genera folio de auditoría.")
+    async def cancelar_tarjeta(self, motivo: str) -> str:
+        if not supabase or not self.cliente_data:
+            return "No se pudo localizar su tarjeta para cancelación. Lo comunicamos con un ejecutivo."
+        try:
+            tarjeta = self.cliente_data.get("numero_tarjeta_mask", "8821")[-4:]
+            cid_last = self.caller_id[-4:]
+            fecha_str = datetime.date.today().isoformat()
+            folio = f"{fecha_str}-{tarjeta}-{cid_last}"
+
+            supabase.table("clientes").update({
+                "estatus_tarjeta": 2,
+                "folio_cancelacion": folio,
+                "fecha_cancelacion": fecha_str,
+                "motivo_cancelacion": motivo
             }).eq("caller_id", self.caller_id).execute()
 
-        return f"El saldo disponible es de ${saldo:.2f} pesos mexicanos en la tarjeta con terminación {tarjeta[-4:]}."
+            supabase.table("tarjetas_cancelaciones_log").insert({
+                "cliente_id": self.cliente_data["id"],
+                "folio_cancelacion": folio,
+                "caller_id": self.caller_id,
+                "numero_tarjeta_mask": self.cliente_data.get("numero_tarjeta_mask", "****"),
+                "estatus_anterior": 1,
+                "estatus_nuevo": 2,
+                "motivo": motivo,
+                "canal": "IVR_OPCION_2"
+            }).execute()
 
-    @llm.ai_callable(description="Registra la solicitud de cancelación de un servicio o tarjeta.")
-    async def registrar_cancelacion(
-        self, 
-        motivo: Annotated[str, llm.TypeInfo(description="Motivo de la cancelación expresado por el cliente")]
-    ) -> str:
-        if supabase:
             supabase.table("llamadas_bitacora").update({
                 "opcion_ivr_seleccionada": "2. Cancelación",
-                "notas_agente": f"Solicitud de cancelación registrada. Motivo: {motivo}"
+                "notas_agente": f"Tarjeta cancelada en Opción 2. Folio: {folio}"
             }).eq("caller_id", self.caller_id).execute()
 
-        return "La solicitud de cancelación ha sido registrada. Debe transferirse a un ejecutivo para formalizar."
-
-    @llm.ai_callable(description="Busca en la base de datos de conocimiento CBR casos similares resueltos anteriormente.")
-    async def buscar_caso_cbr(
-        self,
-        consulta_problema: Annotated[str, llm.TypeInfo(description="Descripción del problema planteado por el cliente")]
-    ) -> str:
-        if not supabase:
-            return "No hay casos similares registrados actualmente."
-
-        try:
-            # Búsqueda semántica en Supabase en tabla cbr_casos
-            res = supabase.table("cbr_casos").select("solucion_aplicada, problema_descripcion").limit(1).execute()
-            if res.data and len(res.data) > 0:
-                caso = res.data[0]
-                return f"Solución previa encontrada para caso similar: {caso['solucion_aplicada']}"
+            return f"Su tarjeta terminación {tarjeta} ha sido cancelada exitosamente bajo el folio {folio}."
         except Exception as e:
-            logger.error(f"Error en consulta CBR: {e}")
+            logger.error(f"Error en cancelación: {e}")
+            return "Ocurrió un inconveniente al cancelar. Procedo a comunicarlo con un asesor."
 
-        return "No se encontró un antecedente exacto. Se recomienda ofrecer atención con un asesor."
-
-    @llm.ai_callable(description="Transfiere la llamada telefónica a un operador o agente humano en el CRM.")
-    async def transferir_a_humano(
-        self,
-        motivo: Annotated[str, llm.TypeInfo(description="Razón por la cual se transfiere con un humano")]
-    ) -> str:
-        logger.info(f"Transfiriendo llamada de {self.caller_id} a operador. Motivo: {motivo}")
-        
-        # En LiveKit SIP, se puede ejecutar la transferencia SIP REFER:
-        # await self.ctx.api.sip.transfer_sip_participant(...)
+    @llm.ai_callable(description="Opción 3: Transfiere la llamada a ventas o ejecutivo humano (Ext. 2001).")
+    async def transferir_a_ventas(self, motivo: str) -> str:
         if supabase:
             supabase.table("llamadas_bitacora").update({
                 "estado": "transferida",
-                "notas_agente": f"Llamada transferida a agente humano. Razón: {motivo}"
+                "opcion_ivr_seleccionada": "3. Ventas / Asesor",
+                "notas_agente": f"Transferida a ventas. Razón: {motivo}"
             }).eq("caller_id", self.caller_id).execute()
+        return "Lo estoy comunicando de inmediato con nuestra ejecutiva de ventas. Por favor permanezca en la línea."
 
-        return "Procediendo a transferir la llamada con un asesor humano. Por favor permanezca en la línea."
+    @llm.ai_callable(description="Opción 4: Consulta y gestiona citas médicas con la Dra. Mariana Fernández en Google Calendar.")
+    async def gestionar_citas_medicas(self) -> str:
+        if not supabase:
+            return "No es posible acceder a la base de citas en este momento."
+        try:
+            res = supabase.table("citas_calendario")\
+                .select("fecha, hora, doctor_asignado, especialidad, estado")\
+                .eq("caller_id", self.caller_id)\
+                .eq("estado", "confirmada")\
+                .order("fecha", desc=False)\
+                .limit(1).execute()
 
+            if res.data and len(res.data) > 0:
+                cita = res.data[0]
+                fecha = cita.get("fecha")
+                hora = str(cita.get("hora", ""))[:5]
+                doc = cita.get("doctor_asignado", "Dra. Mariana Fernández")
+                return f"Cuenta con una cita activa confirmada con la {doc} para el día {fecha} a las {hora} horas."
+        except Exception as e:
+            logger.error(f"Error consultando citas: {e}")
+        return "No localicé citas pendientes con su doctora de cabecera. Podemos agendar para el siguiente día laboral a las 10:00 horas."
 
-# =============================================================================
-# PUNTO DE ENTRADA PRINCIPAL DEL TRABAJADOR LIVEKIT
-# =============================================================================
 
 async def entrypoint(ctx: JobContext):
-    logger.info(f"Conectando agente a la sala LiveKit: {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-
-    # Esperar al participante que llama por SIP (Zoiper/Softphone)
     participant = await ctx.wait_for_participant()
-    
-    # Extraer CallerID (identificador primario)
-    caller_id = participant.identity
-    if not caller_id or caller_id.startswith("agent-"):
-        caller_id = "1001" # Valor de prueba por defecto
-    logger.info(f"Llamada entrante detectada. CallerID Primario: {caller_id}")
+    caller_id = participant.identity or "1001"
 
-    # 1. Buscar cliente en Supabase
     cliente_data = None
     if supabase:
         try:
@@ -152,84 +154,54 @@ async def entrypoint(ctx: JobContext):
             if res.data and len(res.data) > 0:
                 cliente_data = res.data[0]
         except Exception as e:
-            logger.error(f"Error consultando cliente: {e}")
+            logger.error(f"Error cliente: {e}")
 
     nombre = cliente_data["nombre_completo"] if cliente_data else "estimado cliente"
-    saldo = cliente_data["saldo"] if cliente_data else 0.0
-
-    # 2. Registrar en la bitácora para DISPARAR SCREEN-POP en el CRM en tiempo real
-    if supabase:
-        try:
-            supabase.table("llamadas_bitacora").insert({
-                "caller_id": caller_id,
-                "cliente_id": cliente_data["id"] if cliente_data else None,
-                "tipo": "entrante",
-                "estado": "en_curso",
-                "opcion_ivr_seleccionada": "Conectado a LiveKit ARM"
-            }).execute()
-        except Exception as e:
-            logger.error(f"Error insertando bitácora Screen-Pop: {e}")
-
-    # 3. Contexto de Funciones e Instrucciones para el LLM
     fnc_ctx = IVRFunctionContext(caller_id, cliente_data, ctx)
 
     system_prompt = f"""
-    Eres el Agente Inteligente de Atención Telefónica (ARM) para la empresa.
-    Estás hablando por teléfono con el cliente: {nombre}.
-    Su CallerID es: {caller_id} y su saldo actual es ${saldo:.2f} MXN.
-
-    Tus objetivos principales:
-    1. Dar una bienvenida cálida y humana.
-    2. Las 3 opciones principales del sistema son:
-       - Opción 1: Consulta de saldo.
-       - Opción 2: Cancelación de servicios.
-       - Opción 3: Ventas o hablar con un asesor.
-    3. Si el cliente tiene una duda compleja o un reclamo, utiliza la herramienta 'buscar_caso_cbr' para consultar antecedentes resueltos.
-    4. Si no conoces la respuesta o el cliente solicita hablar con una persona, invoca inmediatamente 'transferir_a_humano'.
-    5. Sé conciso, profesional y habla con naturalidad de voz humana. Respuestas cortas aptas para teléfono.
+    Eres el asistente telefónico del sistema ARM. Estás hablando con: {nombre} ({caller_id}).
+    EL MENÚ ESTÁNDAR DEL IVR ES ESTRICTAMENTE:
+    1: Consulta de Saldo
+    2: Cancelación de Tarjeta
+    3: Ventas y Transferencia a Agente Humano
+    4: Citas Médicas y Agenda con la Dra. Mariana Fernández
     """
 
-    # 4. Configurar el Asistente de Voz con Silero VAD + Deepgram + ElevenLabs + LLM
-    # Elegir proveedor de LLM disponible (Gemini por defecto o OpenAI)
+    stt_engine = deepgram.STT(language="es", model="nova-2")
     llm_engine = google.LLM(model="gemini-2.0-flash") if os.getenv("GOOGLE_API_KEY") else openai.LLM(model="gpt-4o-mini")
+    tts_engine = elevenlabs.TTS(
+        model="eleven_multilingual_v2",
+        voice_id=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+    )
 
     assistant = VoiceAssistant(
         vad=silero.VAD.load(),
-        stt=deepgram.STT(language="es", model="nova-2"),
+        stt=stt_engine,
         llm=llm_engine,
-        tts=elevenlabs.TTS(
-            model="eleven_multilingual_v2",
-            voice_id=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM") # Rachel / Voz en español
-        ),
+        tts=tts_engine,
         fnc_ctx=fnc_ctx,
         system_prompt=system_prompt
     )
 
-    # 5. Soporte para Tonos DTMF (Teclas del teléfono 1, 2, 3)
     @ctx.room.on("sip_dtmf_received")
     def on_dtmf_received(dtmf_event: rtc.SipDTMF):
         digit = dtmf_event.digit
-        logger.info(f"[DTMF Detectado] El cliente presionó: {digit}")
-        
         if digit == "1":
-            asyncio.create_task(assistant.say(f"Su saldo disponible es de {saldo:.2f} pesos mexicanos."))
+            asyncio.create_task(fnc_ctx.consultar_saldo())
         elif digit == "2":
-            asyncio.create_task(assistant.say("Registrando su intención de cancelación. Lo comunicamos con el área de retenciones."))
-            asyncio.create_task(fnc_ctx.transferir_a_humano("Pulsó 2 en DTMF"))
+            asyncio.create_task(fnc_ctx.cancelar_tarjeta("Pulsó 2 en IVR"))
         elif digit == "3":
-            asyncio.create_task(assistant.say("Lo comunicamos con el departamento de ventas. Por favor espere."))
-            asyncio.create_task(fnc_ctx.transferir_a_humano("Pulsó 3 en DTMF"))
+            asyncio.create_task(fnc_ctx.transferir_a_ventas("Pulsó 3 en IVR"))
+        elif digit == "4":
+            asyncio.create_task(fnc_ctx.gestionar_citas_medicas())
 
-    # Iniciar el asistente en la sala
     assistant.start(ctx.room)
-
-    # Saludo inicial con voz de ElevenLabs
     await assistant.say(
-        f"Hola {nombre}, bienvenido a nuestro centro de atención inteligente. "
-        "¿Desea consultar su saldo, gestionar una cancelación o hablar con un asesor de ventas?",
+        f"Hola {nombre}, bienvenido a su sistema ARM. "
+        "Marque 1 para saldo, 2 para cancelación de tarjeta, 3 para ventas, o 4 para citas médicas.",
         allow_interruptions=True
     )
-
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

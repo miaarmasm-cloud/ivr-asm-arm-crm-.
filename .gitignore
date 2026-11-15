@@ -40,6 +40,8 @@ livekit-records/
 
 # Credentials & Secrets (Local only, never push to git)
 credenciales/
+google calendario/
+google_calendario/
 mcp-server/mcp_config.json
 .agents/mcp_config.json
 .agents/plugins/**/mcp_config.json
@@ -49,6 +51,7 @@ google_*.json
 *.txt
 *.pem
 *.key
+*.tsbuildinfo
 .env
 .env.local
 .env.production
