@@ -207,10 +207,16 @@ export async function POST(request: Request) {
         });
       }
 
+      // REGLA ESTRICTA DE INMUTABILIDAD: Si la extensión ya existe, se preserva su contraseña
+      // existente y NUNCA se sobreescribe al dar de alta otras extensiones o guardar campañas.
+      const finalPassword = (existing && existing.password) 
+        ? existing.password 
+        : (password || `ARMpass${extension}!`);
+
       const payload = {
         extension,
         nombre_agente: nombre,
-        password: defaultPassword,
+        password: finalPassword,
         campana_id: campanaId || existing?.campana_id,
         campana_slug: campanaSlug || existing?.campana_slug || 'atencion_clientes',
         did_virtual_campana: didVirtual || existing?.did_virtual_campana || '1000',
@@ -243,14 +249,14 @@ export async function POST(request: Request) {
             agentesList[idx] = {
               ...agentesList[idx],
               nombre,
-              password: defaultPassword,
+              password: agentesList[idx].password || finalPassword,
               activo
             };
           } else {
             agentesList.push({
               extension,
               nombre,
-              password: defaultPassword,
+              password: finalPassword,
               activo: true
             });
           }
