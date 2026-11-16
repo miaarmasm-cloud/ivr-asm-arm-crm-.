@@ -74,7 +74,7 @@ export interface CitaMedica {
   hora: string;  // HH:MM
   especialidad: string;
   motivo: string;
-  estado: 'confirmada' | 'cancelada' | 'en_espera' | 'completada';
+  estado: 'confirmada' | 'cancelada' | 'en_espera' | 'completada' | 'atendida' | 'reprogramada';
   doctor_asignado?: string;
   notas_ia?: string;
   created_at?: string;
