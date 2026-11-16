@@ -339,7 +339,8 @@ export default function CustomerRegistrationModal({
               <button
                 type="button"
                 onClick={() => {
-                  setTelefonosAdicionales(prev => prev ? `${prev}, ${cleanCaller}` : cleanCaller);
+                  const num = callerId.trim();
+                  setTelefonosAdicionales(prev => prev ? `${prev}, ${num}` : num);
                   setDuplicateWarning(null);
                 }}
                 className="px-2.5 py-1 bg-white border border-amber-300 text-amber-800 font-bold rounded-lg text-[11px] hover:bg-amber-100 transition"
