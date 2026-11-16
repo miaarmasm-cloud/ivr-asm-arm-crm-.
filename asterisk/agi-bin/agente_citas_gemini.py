@@ -376,6 +376,18 @@ def resolver_id_paciente(cliente, caller_id):
     num_seed = sum(ord(c) for c in clean_cid) * 12345
     return f"PAC-{1000000 + (num_seed % 8999999)}"
 
+def vocalizar_folio(folio_str):
+    """Convierte un folio como CIT-1117-0921 en locución legible y pausada para edge-tts."""
+    if not folio_str:
+        return ""
+    partes = str(folio_str).split("-")
+    if len(partes) == 3:
+        prefijo = ", ".join(list(partes[0]))
+        medio = ", ".join(list(partes[1]))
+        sufijo = ", ".join(list(partes[2]))
+        return f"{prefijo}, guión, {medio}, guión, {sufijo}"
+    return ", ".join(list(str(folio_str).replace("-", ", guión, ")))
+
 def calcular_siguiente_dia_laboral():
     hoy = datetime.date.today()
     siguiente = hoy + datetime.timedelta(days=1)
@@ -704,11 +716,17 @@ def main():
 
     if tecla == "1":
         if cita_activa:
+            folio_actual = cita_activa.get('folio_cita')
+            if not folio_actual:
+                folio_actual = f"CIT-{str(cita_activa.get('fecha'))[5:].replace('-', '')}-{caller_id[-4:]}"
+                http_patch(f"citas_calendario?id=eq.{cita_activa.get('id')}", {"folio_cita": folio_actual})
+            folio_voz = vocalizar_folio(folio_actual)
             mensaje_exito = (
                 f"Muchas gracias {primer_nombre}. Su asistencia a su cita de seguimiento del "
                 f"{formatear_fecha_es(cita_activa.get('fecha'))} a las {str(cita_activa.get('hora'))[:5]} horas "
                 f"con la {cita_activa.get('doctor_asignado', doctor_cabecera)} ha quedado ratificada en nuestro sistema. "
-                f"Le recordamos continuar con las indicaciones de su tratamiento médico."
+                f"Su folio de cita para check-in al llegar a la clínica es: {folio_voz}. "
+                f"Por favor preséntelo en recepción. Le recordamos continuar con las indicaciones de su tratamiento médico."
             )
             hablar(mensaje_exito)
             http_post("llamadas_bitacora", {
@@ -718,31 +736,35 @@ def main():
                 "tipo": "entrante",
                 "estado": "finalizada",
                 "opcion_ivr_seleccionada": "Confirmación de Cita de Seguimiento",
-                "resumen_ia": f"Paciente {nombre} ratificó asistencia a cita del {cita_activa.get('fecha')} con {cita_activa.get('doctor_asignado', doctor_cabecera)}.",
-                "notas_agente": f"Folio Hito: {folio_hito} | Folio cita: {cita_activa.get('id')}",
+                "resumen_ia": f"Paciente {nombre} ratificó asistencia a cita del {cita_activa.get('fecha')} con {cita_activa.get('doctor_asignado', doctor_cabecera)}. Folio de Cita: {folio_actual}.",
+                "notas_agente": f"Folio Hito: {folio_hito} | Folio Cita: {folio_actual} | ID Paciente: {cita_activa.get('id_paciente') or resolver_id_paciente(cliente, caller_id)}",
                 "folio_hito": folio_hito,
                 "caso_cbr_id": casos_cbr[0].get("id") if casos_cbr else None
             })
             return
+
+        id_paciente_val = resolver_id_paciente(cliente, caller_id)
 
         if doctor_ocupado and not cita_activa:
             fecha_final = fecha_objetivo
             hora_final = hora_turno
             doctor_final = medico_turno
             especialidad_final = "Medicina Interna y Cardiología"
-            mensaje_exito = (
-                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el {formatear_fecha_es(fecha_final)} a las {hora_final} horas "
-                f"con el {doctor_final}. Su horario ha quedado reservado en Google Calendar."
-            )
         else:
             fecha_final = fecha_objetivo
             hora_final = hora_preferente
             doctor_final = doctor_cabecera
             especialidad_final = "Medicina Familiar y Preventiva"
-            mensaje_exito = (
-                f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el {formatear_fecha_es(fecha_final)} a las {hora_final} horas "
-                f"con su doctora de cabecera {doctor_final}. Hemos sincronizado su evento en Google Calendar."
-            )
+
+        folio_cita = f"CIT-{fecha_final.replace('-', '')[4:]}-{caller_id[-4:]}"
+        folio_voz = vocalizar_folio(folio_cita)
+
+        mensaje_exito = (
+            f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el {formatear_fecha_es(fecha_final)} a las {hora_final} horas "
+            f"con {doctor_final}. "
+            f"Su folio de confirmación para check-in al llegar a la clínica es: {folio_voz}. "
+            f"Por favor preséntelo en recepción al acudir. Hemos sincronizado su evento en Google Calendar."
+        )
 
         # 1. Crear evento en Google Calendar
         g_id = crear_evento_google_calendar(
@@ -758,14 +780,18 @@ def main():
         # 2. Insertar cita en Supabase
         payload_cita = {
             "caller_id": caller_id,
+            "cliente_id": cliente.get("id") if cliente else None,
+            "id_paciente": id_paciente_val,
+            "folio_cita": folio_cita,
             "paciente_nombre": nombre,
             "fecha": fecha_final,
             "hora": f"{hora_final}:00",
             "especialidad": especialidad_final,
             "motivo": sugerencia_preventiva,
             "estado": "confirmada",
+            "checkin_estado": "pendiente",
             "doctor_asignado": doctor_final,
-            "notas_ia": f"Call Session UUID: {call_session_uuid} | Folio Hito: {folio_hito} | Google Calendar Event ID: {g_id or 'offline'} | Agendado por Opción 4 del IVR"
+            "notas_ia": f"Call Session UUID: {call_session_uuid} | Folio Hito: {folio_hito} | Folio Cita: {folio_cita} | ID Paciente: {id_paciente_val} | Google Calendar Event ID: {g_id or 'offline'} | Agendado por Opción 4 del IVR"
         }
         http_post("citas_calendario", payload_cita)
 
@@ -777,8 +803,8 @@ def main():
             "tipo": "entrante",
             "estado": "finalizada",
             "opcion_ivr_seleccionada": "4. Citas Médicas (Google Calendar Homologado)",
-            "resumen_ia": f"Cita confirmada con {doctor_final} el {fecha_final} a las {hora_final} hrs para {nombre}. Motivo: {sugerencia_preventiva}.",
-            "notas_agente": f"Folio Hito: {folio_hito} | Sincronizado con Google Calendar ID: {g_id or 'N/A'}",
+            "resumen_ia": f"Cita confirmada con {doctor_final} el {fecha_final} a las {hora_final} hrs para {nombre}. Motivo: {sugerencia_preventiva}. Folio: {folio_cita}.",
+            "notas_agente": f"Folio Hito: {folio_hito} | Folio Cita: {folio_cita} | ID Paciente: {id_paciente_val} | Sincronizado con Google Calendar ID: {g_id or 'N/A'}",
             "folio_hito": folio_hito,
             "caso_cbr_id": casos_cbr[0].get("id") if casos_cbr else None
         })
@@ -834,6 +860,9 @@ def main():
                     doctor_cabecera
                 )
 
+                id_paciente_val = cita_activa.get("id_paciente") or resolver_id_paciente(cliente, caller_id)
+                nuevo_folio_cita = f"CIT-{slot_doc['fecha'].replace('-', '')[4:]}-{caller_id[-4:]}"
+
                 http_patch(
                     f"citas_calendario?id=eq.{cita_activa.get('id')}",
                     {
@@ -842,7 +871,10 @@ def main():
                         "doctor_asignado": doctor_cabecera,
                         "especialidad": "Medicina Familiar y Preventiva",
                         "estado": "confirmada",
-                        "notas_ia": f"Call Session UUID: {call_session_uuid} | Folio Hito: {folio_hito} | Google Calendar Event ID: {nuevo_gid or google_id or 'offline'} | Reprogramada con médico de cabecera vía IVR Opción 4"
+                        "checkin_estado": "pendiente",
+                        "folio_cita": nuevo_folio_cita,
+                        "id_paciente": id_paciente_val,
+                        "notas_ia": f"Call Session UUID: {call_session_uuid} | Folio Hito: {folio_hito} | Folio Cita: {nuevo_folio_cita} | ID Paciente: {id_paciente_val} | Google Calendar Event ID: {nuevo_gid or google_id or 'offline'} | Reprogramada con médico de cabecera vía IVR Opción 4"
                     }
                 )
 
@@ -853,16 +885,18 @@ def main():
                     "tipo": "entrante",
                     "estado": "finalizada",
                     "opcion_ivr_seleccionada": "Reprogramación de Cita (Médico de Cabecera)",
-                    "resumen_ia": f"Paciente {nombre} reprogramó su cita para el {slot_doc['fecha']} a las {slot_doc['hora']} hrs con {doctor_cabecera}.",
-                    "notas_agente": f"Folio Hito: {folio_hito} | Sincronizado con Google Calendar ID: {nuevo_gid or google_id or 'N/A'}",
+                    "resumen_ia": f"Paciente {nombre} reprogramó su cita para el {slot_doc['fecha']} a las {slot_doc['hora']} hrs con {doctor_cabecera}. Folio generado: {nuevo_folio_cita}.",
+                    "notas_agente": f"Folio Hito: {folio_hito} | Folio Cita: {nuevo_folio_cita} | Sincronizado con Google Calendar ID: {nuevo_gid or google_id or 'N/A'}",
                     "folio_hito": folio_hito,
                     "caso_cbr_id": casos_cbr[0].get("id") if casos_cbr else None
                 })
 
+                folio_voz = vocalizar_folio(nuevo_folio_cita)
                 mensaje_reprog = (
                     f"Excelente, {primer_nombre}. Su cita médica ha sido reprogramada exitosamente para el día {fecha_doc_txt} "
                     f"a las {slot_doc['hora']} horas con su doctora de cabecera la {doctor_cabecera}. "
-                    f"El horario ya se encuentra actualizado y sincronizado en el calendario de la clínica."
+                    f"Su nuevo folio de cita para check-in al llegar a la clínica es: {folio_voz}. "
+                    f"Por favor preséntelo en recepción al acudir. El horario ya se encuentra actualizado y sincronizado en el calendario de la clínica."
                 )
                 hablar(mensaje_reprog)
 
@@ -882,6 +916,9 @@ def main():
                     medico_alt
                 )
 
+                id_paciente_val = cita_activa.get("id_paciente") or resolver_id_paciente(cliente, caller_id)
+                nuevo_folio_cita = f"CIT-{slot_alt['fecha'].replace('-', '')[4:]}-{caller_id[-4:]}"
+
                 http_patch(
                     f"citas_calendario?id=eq.{cita_activa.get('id')}",
                     {
@@ -890,7 +927,10 @@ def main():
                         "doctor_asignado": medico_alt,
                         "especialidad": "Medicina Interna y Cardiología",
                         "estado": "confirmada",
-                        "notas_ia": f"Call Session UUID: {call_session_uuid} | Folio Hito: {folio_hito} | Google Calendar Event ID: {nuevo_gid or google_id or 'offline'} | Reprogramada con médico alternativo vía IVR Opción 4"
+                        "checkin_estado": "pendiente",
+                        "folio_cita": nuevo_folio_cita,
+                        "id_paciente": id_paciente_val,
+                        "notas_ia": f"Call Session UUID: {call_session_uuid} | Folio Hito: {folio_hito} | Folio Cita: {nuevo_folio_cita} | ID Paciente: {id_paciente_val} | Google Calendar Event ID: {nuevo_gid or google_id or 'offline'} | Reprogramada con médico alternativo vía IVR Opción 4"
                     }
                 )
 
@@ -901,16 +941,18 @@ def main():
                     "tipo": "entrante",
                     "estado": "finalizada",
                     "opcion_ivr_seleccionada": "Reprogramación de Cita (Médico Especialista Alternativo)",
-                    "resumen_ia": f"Paciente {nombre} reprogramó su cita para el {slot_alt['fecha']} a las {slot_alt['hora']} hrs con {medico_alt}.",
-                    "notas_agente": f"Folio Hito: {folio_hito} | Sincronizado con Google Calendar ID: {nuevo_gid or google_id or 'N/A'}",
+                    "resumen_ia": f"Paciente {nombre} reprogramó su cita para el {slot_alt['fecha']} a las {slot_alt['hora']} hrs con {medico_alt}. Folio generado: {nuevo_folio_cita}.",
+                    "notas_agente": f"Folio Hito: {folio_hito} | Folio Cita: {nuevo_folio_cita} | Sincronizado con Google Calendar ID: {nuevo_gid or google_id or 'N/A'}",
                     "folio_hito": folio_hito,
                     "caso_cbr_id": casos_cbr[0].get("id") if casos_cbr else None
                 })
 
+                folio_voz = vocalizar_folio(nuevo_folio_cita)
                 mensaje_reprog = (
                     f"Perfecto, {primer_nombre}. Su cita médica ha sido reprogramada exitosamente para el día {fecha_alt_txt} "
                     f"a las {slot_alt['hora']} horas con el {medico_alt}. "
-                    f"El horario ya se encuentra registrado en nuestro sistema."
+                    f"Su nuevo folio de cita para check-in al llegar a la clínica es: {folio_voz}. "
+                    f"Por favor preséntelo en recepción al acudir. El horario ya se encuentra registrado en nuestro sistema."
                 )
                 hablar(mensaje_reprog)
 
@@ -965,7 +1007,7 @@ def main():
                 "notas_agente": f"Sincronizado con Google Calendar ID: {g_id or 'N/A'} | Folio Cita: {folio_cita} | ID Paciente: {id_paciente_val}"
             })
 
-            folio_voz = " ".join(list(folio_cita.replace("-", " ")))
+            folio_voz = vocalizar_folio(folio_cita)
             mensaje_sig = (
                 f"Excelente, {primer_nombre}. Su cita ha quedado confirmada para el {formatear_fecha_es(fecha_final)} a las {hora_final} horas "
                 f"con su doctora de cabecera {doctor_final}. Su folio de cita para check-in al llegar a la clínica es: {folio_voz}. "
@@ -1005,7 +1047,7 @@ def main():
             }
             http_post("citas_calendario", payload_cita)
 
-            folio_voz = " ".join(list(folio_cita.replace("-", " ")))
+            folio_voz = vocalizar_folio(folio_cita)
             mensaje_turno = (
                 f"Perfecto, {primer_nombre}. Su cita ha quedado reservada para el día {formatear_fecha_es(fecha_objetivo)} "
                 f"a las {hora_agendada} horas con el {doctor_final}. Su folio para check-in es: {folio_voz}."

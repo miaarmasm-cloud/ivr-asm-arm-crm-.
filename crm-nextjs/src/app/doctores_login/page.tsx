@@ -128,6 +128,8 @@ export default function DoctoresLoginPage() {
   const [signosPeso, setSignosPeso] = useState('70.0');
   const [proximaCitaFecha, setProximaCitaFecha] = useState('');
   const [proximaCitaHora, setProximaCitaHora] = useState('10:00');
+  const [inputFolioCitaCheckOut, setInputFolioCitaCheckOut] = useState('');
+  const [folioCheckOutError, setFolioCheckOutError] = useState('');
   const [isSavingConsult, setIsSavingConsult] = useState(false);
 
   // Modal de Exportación PDF
@@ -391,6 +393,8 @@ export default function DoctoresLoginPage() {
     setSignosFC('72');
     setSignosGlucosa('95');
     setSignosPeso('70.0');
+    setInputFolioCitaCheckOut('');
+    setFolioCheckOutError('');
 
     // Programar fecha tentativa para 30 días
     const d = new Date();
@@ -401,14 +405,29 @@ export default function DoctoresLoginPage() {
     setIsConsultModalOpen(true);
   };
 
-  // Guardar Consulta y Diagnóstico
+  // Guardar Consulta y Diagnóstico con Validación de Folio Check-Out
   const handleSaveConsultation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loggedDoctor || !consultTargetPatient) return;
 
+    // Validación obligatoria de Folio de Cita (Candado de Check-Out)
+    const cleanInputFolio = inputFolioCitaCheckOut.trim().toUpperCase();
+    const expectedFolio = (consultTargetPatient.folio_cita || '').trim().toUpperCase();
+
+    if (!cleanInputFolio) {
+      setFolioCheckOutError('Candado de Seguridad Obligatorio: Ingrese el Folio de Cita del paciente (ej. CIT-1117-0921) para autorizar la prescripción y cerrar el Check-Out.');
+      return;
+    }
+
+    if (expectedFolio && cleanInputFolio !== expectedFolio) {
+      setFolioCheckOutError(`Discrepancia de Folio: El folio ingresado (${cleanInputFolio}) no coincide con el folio asignado en admisión (${expectedFolio}). Verifique con el carnet de cita del paciente.`);
+      return;
+    }
+
     setIsSavingConsult(true);
+    setFolioCheckOutError('');
     const patientId = consultTargetPatient.id_paciente || 'PAC-1089754';
-    const folioCita = consultTargetPatient.folio_cita || 'CIT-0921-8421';
+    const folioCita = cleanInputFolio || consultTargetPatient.folio_cita || 'CIT-0921-8421';
     const cleanSuffix = folioCita.replace('CIT-', '') || consultTargetPatient.caller_id.slice(-4);
     const folioReceta = `REC-${new Date().getFullYear()}-MED-${cleanSuffix}`;
 
@@ -1479,6 +1498,80 @@ ${h.proxima_cita || 'Según evolución del paciente.'}
                     className="bg-white border border-indigo-200 rounded-lg px-2 py-1 font-mono text-xs"
                   />
                 </div>
+              </div>
+
+              {/* Candado de Seguridad Médica & Confirmación de Folio Check-Out */}
+              <div className="p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-200/80 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 bg-amber-500 text-white rounded-xl shadow-xs">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                        Candado de Seguridad y Trazabilidad (Check-Out)
+                        <span className="text-[9px] bg-amber-200 text-amber-900 px-1.5 py-0.2 rounded font-mono font-bold">HL7 / JCI IPSG #1</span>
+                      </h4>
+                      <p className="text-[11px] text-amber-800 leading-tight">
+                        Para autorizar la receta médica oficial y liberar la consulta, ingrese o confirme el Folio de Cita presentado por el paciente.
+                      </p>
+                    </div>
+                  </div>
+                  {consultTargetPatient?.folio_cita && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInputFolioCitaCheckOut(consultTargetPatient.folio_cita || '');
+                        setFolioCheckOutError('');
+                      }}
+                      className="shrink-0 text-[10px] bg-white hover:bg-amber-100 text-amber-900 font-bold px-2.5 py-1 rounded-lg border border-amber-300 shadow-xs transition active:scale-95 flex items-center gap-1"
+                      title="Autocompletar con folio registrado en admisión/IVR"
+                    >
+                      <Check className="w-3 h-3 text-emerald-600" /> Confirmar Folio Asignado
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <span className="text-[10px] font-bold text-amber-900 block mb-1">
+                      Folio Registrado en Admisión / IVR:
+                    </span>
+                    <div className="bg-white/90 border border-amber-200 rounded-xl px-3 py-2 font-mono text-xs font-bold text-slate-800 flex items-center justify-between">
+                      <span>{consultTargetPatient?.folio_cita || 'Sin folio previo (Registro presencial)'}</span>
+                      <span className="text-[10px] text-amber-700 font-sans font-semibold bg-amber-100 px-1.5 py-0.5 rounded">Admisión</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-black text-amber-950 uppercase block mb-1 flex items-center justify-between">
+                      <span>Ingresar Folio de Cita (Check-Out) *</span>
+                      <span className="text-[10px] font-normal text-rose-600 lowercase font-mono">requerido</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={inputFolioCitaCheckOut}
+                      onChange={(e) => {
+                        setInputFolioCitaCheckOut(e.target.value.toUpperCase());
+                        if (folioCheckOutError) setFolioCheckOutError('');
+                      }}
+                      placeholder="ej. CIT-1117-0921"
+                      className={`w-full bg-white border-2 rounded-xl px-3 py-2 font-mono text-xs font-black uppercase tracking-wider focus:outline-none transition ${
+                        folioCheckOutError 
+                          ? 'border-rose-500 ring-2 ring-rose-200 text-rose-800' 
+                          : 'border-amber-300 focus:border-amber-500 text-slate-900'
+                      }`}
+                      required
+                    />
+                  </div>
+                </div>
+
+                {folioCheckOutError && (
+                  <div className="p-2.5 bg-rose-100 border border-rose-300 rounded-xl flex items-center gap-2 text-rose-900 text-xs font-semibold animate-in shake">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{folioCheckOutError}</span>
+                  </div>
+                )}
               </div>
 
               {/* Botones de Envío */}
