@@ -216,6 +216,16 @@ def main():
         if clientes:
             cliente = clientes[0]
 
+    # VALIDACIÓN CLIENTE NUEVO: Si no existe cliente ni tarjeta, canalizar a Ventas
+    if not cliente:
+        texto_nuevo = (
+            "Estimado usuario, este número telefónico no cuenta con tarjetas activas registradas en el sistema para trámite de cancelación. "
+            "Lo comunicamos de inmediato con una ejecutiva de ventas para brindarle información sobre nuestras tarjetas y beneficios."
+        )
+        hablar(texto_nuevo, escape_digits="")
+        agi_cmd('EXEC Dial "PJSIP/3001&PJSIP/3002,30"')
+        return
+
     nombre_completo = cliente.get("nombre_completo", "Estimado cliente") if cliente else "Estimado cliente"
     primer_nombre = nombre_completo.split()[0]
     tarjeta_mask = cliente.get("numero_tarjeta_mask", "**** **** **** 8821") if cliente else "**** **** **** 8821"

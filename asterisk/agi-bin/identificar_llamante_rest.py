@@ -91,24 +91,35 @@ def consultar_campana_por_did(did):
     }
 
 def consultar_cliente_por_callerid(caller_id):
-    """Obtiene el cliente de Supabase por su CallerID (incluyendo su UUID 'id')."""
+    """Obtiene el cliente de Supabase por su CallerID (incluyendo normalización de prefijo 77 de prueba)."""
     if not caller_id:
         return None
-    url = f"{SUPABASE_URL}/rest/v1/clientes?caller_id=eq.{caller_id}&select=*"
+
+    cid_str = str(caller_id).strip()
+    candidatos = [cid_str]
+    if cid_str.startswith("77"):
+        candidatos.append(cid_str[2:])
+    else:
+        candidatos.append(f"77{cid_str}")
+
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
-    req = urllib.request.Request(url, headers=headers, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            if resp.status == 200:
-                data = json.loads(resp.read().decode())
-                if data and len(data) > 0:
-                    return data[0]
-    except Exception as e:
-        sys.stderr.write(f"Error consultando caller_id: {e}\n")
+
+    for cid in candidatos:
+        url = f"{SUPABASE_URL}/rest/v1/clientes?caller_id=eq.{cid}&select=*"
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode())
+                    if data and len(data) > 0:
+                        return data[0]
+        except Exception as e:
+            sys.stderr.write(f"Error consultando caller_id ({cid}): {e}\n")
+
     return None
 
 def registrar_inicio_llamada_bitacora(caller_id, cliente_id, did_marcado, campana, nombre_cliente=None):
@@ -340,22 +351,24 @@ def main():
         agi_cmd('SET PRIORITY 1')
         return
 
-    # CASO D: CAMPAÑA DE ATENCIÓN A CLIENTES GENERAL (Opciones 1, 2, 3, 4)
+    # CASO D: CAMPAÑA DE ATENCIÓN A CLIENTES GENERAL (BIFURCACIÓN DE 2 IVRs SEGÚN HISTORIAL)
     if cliente:
+        # IVR 1: CLIENTES EXISTENTES (CON HISTORIAL CLÍNICO, SALDO Y TARJETA ACTIVA)
         texto_saludo = (
-            f"Hola {primer_nombre}, bienvenido a su sistema inteligente ARM. "
-            f"Marque 1 para consultar su saldo. "
-            f"Marque 2 para cancelación. "
-            f"Marque 3 para comunicarse con ventas. "
-            f"O marque 4 para agendar o consultar sus citas médicas."
+            f"Hola {primer_nombre}, bienvenido nuevamente a su sistema inteligente ARM. "
+            f"Marque 1 para consultar su saldo disponible. "
+            f"Marque 2 para gestión o cancelación de su tarjeta. "
+            f"Marque 3 para comunicarse con su ejecutiva de ventas. "
+            f"O marque 4 para agendar o consultar sus citas médicas con su doctora de cabecera."
         )
     else:
+        # IVR 2: CLIENTES NUEVOS (PROCESO DE ALTA, CONTRATACIÓN Y APERTURA DE EXPEDIENTE)
         texto_saludo = (
-            "Bienvenido al sistema inteligente de atención a clientes. "
-            "Marque 1 para consultar su saldo. "
-            "Marque 2 para cancelación. "
-            "Marque 3 para comunicarse con una ejecutiva de ventas. "
-            "O marque 4 para agendar o consultar sus citas médicas."
+            "Bienvenido al sistema inteligente de atención a clientes ARM. "
+            "Detectamos que nos contacta por primera vez desde esta línea telefónica. "
+            "Marque 3 para solicitar y tramitar su nueva tarjeta con una ejecutiva de ventas. "
+            "Marque 4 para agendar su primera consulta médica y aperturar su expediente clínico. "
+            "O marque 1 o 2 si desea información y trámite de registro para clientes nuevos."
         )
 
     sintetizar_voz(texto_saludo, audio_path)

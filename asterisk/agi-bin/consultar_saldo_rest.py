@@ -251,11 +251,12 @@ def main():
         registrar_llamada_crm(cliente, caller_id, "1. Consulta de Saldo DTMF", resumen)
 
     else:
+        # Cliente nuevo sin registro previo de tarjeta
         texto = (
-            "Lo sentimos, no encontramos ninguna cuenta asociada a los dígitos ingresados. "
-            "Por favor verifique su tarjeta o comuníquese con un ejecutivo."
+            "Estimado usuario, este número telefónico aún no cuenta con una tarjeta registrada en el sistema. "
+            "Lo transferimos de inmediato con una ejecutiva de ventas para tramitar su alta y asignarle su nueva tarjeta con saldo."
         )
-        registrar_llamada_crm(None, caller_id, "1. Consulta de Saldo DTMF", f"Tarjeta no encontrada: {tarjeta_dtmf}")
+        registrar_llamada_crm(None, caller_id, "1. Consulta de Saldo - Cliente Nuevo", f"Cliente nuevo sin tarjeta. Transferido a Ventas (DID 3000)")
 
     # Intentar síntesis con ElevenLabs (Voz Humana de IA)
     ok = sintetizar_audio_elevenlabs(texto, audio_path)
@@ -272,6 +273,10 @@ def main():
             pass
     else:
         agi_cmd('STREAM FILE "ivr-tarjeta-no-encontrada" ""')
+
+    # Si es cliente nuevo sin tarjeta, transferir a ejecutivas de Ventas (3001, 3002)
+    if not cliente:
+        agi_cmd('EXEC Dial "PJSIP/3001&PJSIP/3002,30"')
 
 if __name__ == "__main__":
     main()

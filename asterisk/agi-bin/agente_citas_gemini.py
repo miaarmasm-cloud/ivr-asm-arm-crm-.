@@ -378,14 +378,30 @@ def main():
     caller_id = sys.argv[1] if len(sys.argv) > 1 else agi_env.get("agi_callerid", "1001")
 
     # 1. Obtener datos del paciente y su historial clínico (CBR)
-    clientes = http_get(f"clientes?caller_id=eq.{caller_id}&select=*")
-    cliente = clientes[0] if clientes else None
-    nombre = cliente.get("nombre_completo", "Anto Krpax X") if cliente else "Estimado paciente"
-    primer_nombre = nombre.split()[0]
+    # Soporte para normalización de CallerID con o sin prefijo 77
+    cid_candidates = [caller_id]
+    if str(caller_id).startswith("77"):
+        cid_candidates.append(str(caller_id)[2:])
+    else:
+        cid_candidates.append(f"77{caller_id}")
+
+    cliente = None
+    for cid in cid_candidates:
+        clientes = http_get(f"clientes?caller_id=eq.{cid}&select=*")
+        if clientes:
+            cliente = clientes[0]
+            break
+
+    nombre = cliente.get("nombre_completo", "") if cliente else ""
+    primer_nombre = nombre.split()[0] if nombre else ""
     paciente_email = cliente.get("email") if cliente else "anto.krpax@gmail.com"
 
-    historiales = http_get(f"historial_clinico_pacientes?caller_id=eq.{caller_id}&select=*&order=fecha_ultima_consulta.desc&limit=1")
-    historial = historiales[0] if historiales else None
+    historial = None
+    for cid in cid_candidates:
+        historiales = http_get(f"historial_clinico_pacientes?caller_id=eq.{cid}&select=*&order=fecha_ultima_consulta.desc&limit=1")
+        if historiales:
+            historial = historiales[0]
+            break
 
     # 2. Identificar médico de cabecera y sugerencia preventiva
     doctor_cabecera = historial.get("doctor_asignado", "Dra. Mariana Fernández") if historial else "Dra. Mariana Fernández"
@@ -415,16 +431,22 @@ def main():
     medico_turno = "Dr. Fernando Fernández"
     hora_turno = "11:00"
 
-    # Construir locución guiada
-    resumen_clinico = generar_analisis_clinico_gemini(primer_nombre, ultimo_motivo, sugerencia_preventiva, doctor_cabecera)
-    texto_audio = f"Hola {primer_nombre}, bienvenido a la opción de citas médicas del sistema ARM. {resumen_clinico} "
-
     fecha_obj_txt = formatear_fecha_es(fecha_objetivo)
     fecha_sig_txt = formatear_fecha_es(fecha_dia_siguiente)
 
-    if cita_activa:
+    # Bifurcación: Paciente Nuevo vs Paciente con Historial
+    if not cliente and not historial:
+        texto_audio = (
+            f"Bienvenido al área de consultas y agenda médica inteligente del sistema ARM. "
+            f"Detectamos que nos contacta por primera vez. "
+            f"Para realizar la apertura de su expediente clínico y programar su primera consulta para el día {fecha_obj_txt} a las {hora_preferente} horas con nuestro médico especialista, el {medico_turno}, presione 1. "
+            f"O presione 0 para comunicarse de inmediato con un doctor en consultorio."
+        )
+        escape_chars = "10"
+    elif cita_activa:
         fecha_activa_txt = formatear_fecha_es(cita_activa.get('fecha'))
-        texto_audio += (
+        texto_audio = (
+            f"Hola {primer_nombre}, bienvenido nuevamente a su sistema médico ARM. "
             f"Actualmente usted cuenta con una cita confirmada para el día {fecha_activa_txt} "
             f"a las {str(cita_activa.get('hora'))[:5]} horas con {cita_activa.get('doctor_asignado')}. "
             f"Presione 1 para confirmar su asistencia. "
@@ -434,7 +456,9 @@ def main():
         )
         escape_chars = "1230"
     elif doctor_ocupado:
-        texto_audio += (
+        resumen_clinico = generar_analisis_clinico_gemini(primer_nombre, ultimo_motivo, sugerencia_preventiva, doctor_cabecera)
+        texto_audio = (
+            f"Hola {primer_nombre}, bienvenido a la opción de citas médicas del sistema ARM. {resumen_clinico} "
             f"Le informamos que su doctora de cabecera, la {doctor_cabecera}, se encuentra ocupada el {fecha_obj_txt} a las {hora_preferente} horas. "
             f"Sin embargo, tenemos las siguientes opciones para usted: "
             f"Presione 1 si desea ser atendido ese mismo día con el {medico_turno} a las {hora_turno} horas. "
@@ -443,7 +467,9 @@ def main():
         )
         escape_chars = "120"
     else:
-        texto_audio += (
+        resumen_clinico = generar_analisis_clinico_gemini(primer_nombre, ultimo_motivo, sugerencia_preventiva, doctor_cabecera)
+        texto_audio = (
+            f"Hola {primer_nombre}, bienvenido a la opción de citas médicas del sistema ARM. {resumen_clinico} "
             f"Su doctora de cabecera, la {doctor_cabecera}, se encuentra disponible en nuestro calendario para el día {fecha_obj_txt} a las {hora_preferente} horas. "
             f"Presione 1 para confirmar y agendar su cita con la {doctor_cabecera}. "
             f"Presione 2 para consultar otros médicos u horarios de la clínica. "
