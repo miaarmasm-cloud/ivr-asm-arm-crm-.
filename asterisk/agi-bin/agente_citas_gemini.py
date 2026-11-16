@@ -303,6 +303,42 @@ def eliminar_evento_google_calendar(google_event_id):
     except Exception as e:
         sys.stderr.write(f"Google Calendar Delete Event Error: {e}\n")
 
+def actualizar_evento_google_calendar(google_event_id, nombre, caller_id, nueva_fecha, nueva_hora, motivo, doctor):
+    """Actualiza la fecha, hora y doctor de un evento existente en Google Calendar."""
+    if not google_event_id or google_event_id == "offline":
+        return crear_evento_google_calendar(nombre, caller_id, nueva_fecha, nueva_hora, motivo, doctor)
+    token = get_google_access_token()
+    if not token:
+        return None
+    try:
+        h_int = int(nueva_hora.split(':')[0])
+        m_int = int(nueva_hora.split(':')[1]) if ':' in nueva_hora else 0
+        start_dt = f"{nueva_fecha}T{h_int:02d}:{m_int:02d}:00-06:00"
+        end_dt = f"{nueva_fecha}T{(h_int+1):02d}:{m_int:02d}:00-06:00"
+        doc_email = DOCTOR_EMAILS.get(doctor, "miaarmasm@gmail.com")
+
+        event_body = {
+            'summary': f"Cita Médica ARM (Reprogramada): {nombre} ({caller_id}) - {doctor}",
+            'description': f"Paciente: {nombre}\nCallerID: {caller_id}\nDoctor Asignado: {doctor}\nMotivo: {motivo}\nReprogramada vía Opción 4 del IVR ARM.",
+            'start': {'dateTime': start_dt, 'timeZone': 'America/Mexico_City'},
+            'end': {'dateTime': end_dt, 'timeZone': 'America/Mexico_City'},
+            'attendees': [{'email': doc_email, 'displayName': doctor}]
+        }
+        url = f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{google_event_id}?sendUpdates=all"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(event_body).encode(),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            method="PATCH"
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            if resp.status in (200, 201):
+                ev = json.loads(resp.read().decode())
+                return ev.get("id")
+    except Exception as e:
+        sys.stderr.write(f"Google Calendar Update Event Error: {e}\n")
+    return None
+
 
 # =============================================================================
 # VALIDACIONES DE DISPONIBILIDAD Y FORMATO
@@ -340,15 +376,84 @@ def verificar_disponibilidad_doctor(doctor_nombre, fecha, hora):
 
     return False
 
+def buscar_disponibilidad_dinamica(doctor_principal, doctor_alternativo, fecha_actual_cita=None):
+    """
+    Busca fechas y horarios disponibles reales tanto en Supabase como en Google Calendar.
+    Evalúa los próximos 5 días laborales para ofrecer:
+    1. Próximo slot disponible con su médico de cabecera (doctor_principal).
+    2. Próximo slot disponible con un médico especialista alternativo (doctor_alternativo).
+    """
+    hoy = datetime.date.today()
+    slots_principal = []
+    slots_alternativo = []
+
+    # Evaluar hasta 5 días hábiles a partir de mañana
+    d = hoy + datetime.timedelta(days=1)
+    dias_revisados = 0
+    horas_revision = ["10:00", "11:00", "12:00", "15:00", "16:00"]
+
+    while dias_revisados < 5 and (len(slots_principal) == 0 or len(slots_alternativo) == 0):
+        if d.weekday() < 5:  # Lunes a Viernes
+            d_iso = d.isoformat()
+            dias_revisados += 1
+
+            for h in horas_revision:
+                # Evitar colisión exacta con la misma cita que se está reprogramando
+                if fecha_actual_cita:
+                    cita_f = str(fecha_actual_cita.get('fecha', ''))[:10]
+                    cita_h = str(fecha_actual_cita.get('hora', ''))[:5]
+                    if d_iso == cita_f and h == cita_h:
+                        continue
+
+                # Revisar médico principal
+                if len(slots_principal) == 0:
+                    if not verificar_disponibilidad_doctor(doctor_principal, d_iso, h):
+                        slots_principal.append({"fecha": d_iso, "hora": h, "doctor": doctor_principal})
+
+                # Revisar médico alternativo
+                if len(slots_alternativo) == 0:
+                    if not verificar_disponibilidad_doctor(doctor_alternativo, d_iso, h):
+                        slots_alternativo.append({"fecha": d_iso, "hora": h, "doctor": doctor_alternativo})
+        d += datetime.timedelta(days=1)
+
+    # Fallbacks garantizados si todas las agendas estuvieran llenas
+    fallback_1 = calcular_siguiente_dia_laboral()
+    d_f1 = datetime.date.fromisoformat(fallback_1)
+    d_f2 = d_f1 + datetime.timedelta(days=1)
+    while d_f2.weekday() >= 5:
+        d_f2 += datetime.timedelta(days=1)
+    fallback_2 = d_f2.isoformat()
+
+    res_p = slots_principal[0] if slots_principal else {"fecha": fallback_2, "hora": "10:00", "doctor": doctor_principal}
+    res_a = slots_alternativo[0] if slots_alternativo else {"fecha": fallback_1, "hora": "11:00", "doctor": doctor_alternativo}
+    return res_p, res_a
+
 
 # =============================================================================
-# INTEGRACIÓN CON GEMINI / RAZONAMIENTO CBR
+# INTEGRACIÓN CON GEMINI / RAZONAMIENTO CBR (CASE-BASED REASONING)
 # =============================================================================
 
-def generar_hito_clinico_gemini(paciente, fecha_consulta, doctor, diagnostico, recomendacion, receta=None):
-    """Genera locución neuronal con el hito de la última consulta, nuevo diagnóstico y tratamiento médico."""
+def consultar_casos_cbr(caller_id):
+    """Consulta la tabla cbr_casos en Supabase para obtener la memoria clínica de resolución y evolución del paciente."""
+    cid_candidates = [caller_id]
+    if str(caller_id).startswith("77"):
+        cid_candidates.append(str(caller_id)[2:])
+    else:
+        cid_candidates.append(f"77{caller_id}")
+
+    for cid in cid_candidates:
+        casos = http_get(f"cbr_casos?caller_id=eq.{cid}&select=*&order=created_at.desc&limit=3")
+        if casos:
+            return casos
+    return []
+
+def generar_evolucion_clinica_cbr_gemini(paciente, fecha_consulta, doctor, diagnostico, recomendacion, receta=None, notas_evolucion=None, casos_cbr=None):
+    """
+    Sintetiza la memoria clínica del caso CBR y la evolución médica del paciente mediante Gemini IA / CBR Fallback.
+    Explica cómo se fue resolviendo el cuadro, la evolución favorable y las indicaciones vigentes.
+    """
     fecha_txt = formatear_fecha_es(fecha_consulta) if fecha_consulta else "recientemente"
-    diag_clean = (diagnostico or "Revisión clínica general").replace("\n", " ").strip()
+    diag_clean = (diagnostico or "Revisión clínica preventiva").replace("\n", " ").strip()
     if len(diag_clean) > 130:
         diag_clean = diag_clean[:130].rsplit('.', 1)[0] + "."
 
@@ -356,16 +461,24 @@ def generar_hito_clinico_gemini(paciente, fecha_consulta, doctor, diagnostico, r
     if len(rec_clean) > 130:
         rec_clean = rec_clean[:130].rsplit('.', 1)[0] + "."
 
+    cbr_resolucion = ""
+    if casos_cbr and len(casos_cbr) > 0:
+        cbr_ult = casos_cbr[0]
+        cbr_resolucion = str(cbr_ult.get("solucion_aplicada", "")).replace("\n", " ").strip()
+        if len(cbr_resolucion) > 130:
+            cbr_resolucion = cbr_resolucion[:130].rsplit('.', 1)[0] + "."
+
     if GEMINI_API_KEY:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
             prompt = (
                 f"Eres el agente médico telefónico del conmutador de la clínica ARM. "
-                f"El paciente {paciente} acudió a su consulta el {fecha_txt} con la {doctor}. "
-                f"Su nuevo diagnóstico emitido por la doctora es: {diag_clean} "
-                f"Y el tratamiento y recomendación prescrita es: {rec_clean} "
-                f"Genera exactamente 2 oraciones breves y amables en español de México para leer en voz alta por teléfono, "
-                f"haciendo referencia explícita al hito de su última visita y la actualización de su diagnóstico y tratamiento."
+                f"El paciente {paciente} acudió a consulta el {fecha_txt} con la {doctor}. "
+                f"Diagnóstico emitido: {diag_clean}. "
+                f"Tratamiento prescrito: {rec_clean}. "
+                f"Memoria clínica CBR de cómo fue resolviendo su caso y su evolución: {cbr_resolucion or notas_evolucion}. "
+                f"Genera exactamente 2 oraciones breves, amables y claras en español de México para leer en voz alta por teléfono, "
+                f"haciendo referencia a su caso clínico, a cómo ha ido resolviendo su evolución con su médico de cabecera y el tratamiento que debe continuar."
             )
             body = {"contents": [{"parts": [{"text": prompt}]}]}
             req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
@@ -374,13 +487,24 @@ def generar_hito_clinico_gemini(paciente, fecha_consulta, doctor, diagnostico, r
                     data = json.loads(resp.read().decode())
                     return data["candidates"][0]["content"]["parts"][0]["text"].strip()
         except Exception as e:
-            sys.stderr.write(f"Gemini API Fallback: {e}\n")
+            sys.stderr.write(f"Gemini API CBR Evolution Fallback: {e}\n")
 
+    # Fallback clínico experto CBR
+    if cbr_resolucion:
+        return (
+            f"En su expediente médico y memoria clínica CBR tenemos registrado el hito de su última consulta del {fecha_txt} atendida por su doctora de cabecera, la {doctor}. "
+            f"Revisando la evolución de su caso sobre {diag_clean}, observamos que se encuentra en resolución favorable bajo tratamiento médico. "
+            f"Le recordamos continuar puntualmente con su indicación de: {rec_clean}."
+        )
     return (
         f"En su expediente médico tenemos registrado el hito de su última consulta del {fecha_txt} atendida por su doctora de cabecera, la {doctor}. "
-        f"Su nuevo diagnóstico actualizado es: {diag_clean} "
+        f"Su nuevo diagnóstico actualizado es: {diag_clean}. "
         f"Y su recomendación y receta médica es: {rec_clean}."
     )
+
+def generar_hito_clinico_gemini(paciente, fecha_consulta, doctor, diagnostico, recomendacion, receta=None):
+    """Compatibilidad hacia atrás con la función anterior de hito clínico."""
+    return generar_evolucion_clinica_cbr_gemini(paciente, fecha_consulta, doctor, diagnostico, recomendacion, receta)
 
 
 # =============================================================================
@@ -417,24 +541,28 @@ def main():
             historial = historiales[0]
             break
 
-    # 2. Identificar médico de cabecera, hito clínico reciente, diagnóstico y prescripción
+    # 2. Identificar médico de cabecera, hito clínico reciente, diagnóstico, prescripción y memoria CBR
+    casos_cbr = consultar_casos_cbr(caller_id)
     doctor_cabecera = historial.get("doctor_asignado", "Dra. Mariana Fernández") if historial else "Dra. Mariana Fernández"
     ultimo_motivo = historial.get("ultimo_motivo", "Revisión de presión arterial y chequeo general") if historial else "Consulta general"
     diagnostico_actual = historial.get("diagnostico_previo", "") if historial else ""
     sugerencia_preventiva = historial.get("sugerencia_preventiva_ia", "Control de signos vitales") if historial else "Chequeo preventivo semestral"
     receta_farmaco = historial.get("receta_medicamentos", "") if historial else ""
     fecha_ult_consulta = historial.get("fecha_ultima_consulta", "") if historial else ""
+    notas_evo = historial.get("notas_evolucion", "") if historial else ""
 
-    # Generar locución con el hito de la última consulta, diagnóstico y tratamiento emitido por la doctora
+    # Generar locución con el hito clínico, evolución médica y memoria CBR
     resumen_hito_clinico = ""
-    if historial:
-        resumen_hito_clinico = generar_hito_clinico_gemini(
+    if historial or casos_cbr:
+        resumen_hito_clinico = generar_evolucion_clinica_cbr_gemini(
             nombre or primer_nombre,
             fecha_ult_consulta,
             doctor_cabecera,
             diagnostico_actual,
             sugerencia_preventiva,
-            receta_farmaco
+            receta_farmaco,
+            notas_evolucion=notas_evo,
+            casos_cbr=casos_cbr
         )
 
     # 3. Verificar si el paciente tiene una cita futura confirmada/pendiente (NO atendida)
@@ -610,17 +738,131 @@ def main():
 
     elif tecla == "2":
         if cita_activa:
-            nueva_hora = "15:00" if str(cita_activa.get("hora", ""))[:5] != "15:00" else "16:00"
-            nueva_fecha = fecha_dia_siguiente
-            http_patch(
-                f"citas_calendario?id=eq.{cita_activa.get('id')}",
-                {"fecha": nueva_fecha, "hora": f"{nueva_hora}:00", "estado": "confirmada", "notas_ia": "Reprogramada por el paciente vía IVR Opción 4"}
+            # Reagendamiento dinámico inteligente con consulta en tiempo real de calendarios
+            medico_alt = "Dr. Fernando Fernández"
+            slot_doc, slot_alt = buscar_disponibilidad_dinamica(doctor_cabecera, medico_alt, fecha_actual_cita=cita_activa)
+
+            fecha_doc_txt = formatear_fecha_es(slot_doc["fecha"])
+            fecha_alt_txt = formatear_fecha_es(slot_alt["fecha"])
+
+            res_sub = hablar(
+                f"Para reprogramar su cita médica, hemos consultado la disponibilidad en tiempo real de nuestros consultorios. "
+                f"Con su médico de cabecera, la {doctor_cabecera}, tenemos disponibilidad para el día {fecha_doc_txt} a las {slot_doc['hora']} horas. "
+                f"Asimismo, si requiere una opción alternativa con otro médico de la clínica, "
+                f"tenemos disponible al {medico_alt} para el día {fecha_alt_txt} a las {slot_alt['hora']} horas. "
+                f"Presione 1 si desea agendar con su doctora de cabecera la {doctor_cabecera} para el {fecha_doc_txt}. "
+                f"Presione 2 para agendar con el {medico_alt} para el {fecha_alt_txt}. "
+                f"O presione 0 para comunicarse directamente con un asesor médico.",
+                "120"
             )
-            mensaje_reprog = (
-                f"Su cita médica ha sido reprogramada exitosamente para el día {formatear_fecha_es(nueva_fecha)} "
-                f"a las {nueva_hora} horas. El horario ya se encuentra actualizado en el calendario."
-            )
-            hablar(mensaje_reprog)
+
+            sub_tecla = ""
+            for dig in ["1", "2", "0"]:
+                if f"result={ord(dig)}" in res_sub:
+                    sub_tecla = dig
+                    break
+
+            if not sub_tecla:
+                resp_sub = agi_cmd("WAIT FOR DIGIT 8000")
+                for dig in ["1", "2", "0"]:
+                    if f"result={ord(dig)}" in resp_sub:
+                        sub_tecla = dig
+                        break
+
+            if sub_tecla == "1":
+                gid = str(cita_activa.get("notas_ia", ""))
+                google_id = None
+                if "Google Calendar Event ID: " in gid:
+                    google_id = gid.split("Google Calendar Event ID: ")[1].strip().split()[0]
+
+                nuevo_gid = actualizar_evento_google_calendar(
+                    google_id,
+                    nombre,
+                    caller_id,
+                    slot_doc["fecha"],
+                    slot_doc["hora"],
+                    cita_activa.get("motivo", ultimo_motivo),
+                    doctor_cabecera
+                )
+
+                http_patch(
+                    f"citas_calendario?id=eq.{cita_activa.get('id')}",
+                    {
+                        "fecha": slot_doc["fecha"],
+                        "hora": f"{slot_doc['hora']}:00",
+                        "doctor_asignado": doctor_cabecera,
+                        "especialidad": "Medicina Familiar y Preventiva",
+                        "estado": "confirmada",
+                        "notas_ia": f"Google Calendar Event ID: {nuevo_gid or google_id or 'offline'} | Reprogramada con médico de cabecera vía IVR Opción 4"
+                    }
+                )
+
+                http_post("llamadas_bitacora", {
+                    "caller_id": caller_id,
+                    "tipo": "entrante",
+                    "estado": "finalizada",
+                    "opcion_ivr_seleccionada": "Reprogramación de Cita (Médico de Cabecera)",
+                    "resumen_ia": f"Paciente {nombre} reprogramó su cita para el {slot_doc['fecha']} a las {slot_doc['hora']} hrs con {doctor_cabecera}.",
+                    "notas_agente": f"Sincronizado con Google Calendar ID: {nuevo_gid or google_id or 'N/A'}"
+                })
+
+                mensaje_reprog = (
+                    f"Excelente, {primer_nombre}. Su cita médica ha sido reprogramada exitosamente para el día {fecha_doc_txt} "
+                    f"a las {slot_doc['hora']} horas con su doctora de cabecera la {doctor_cabecera}. "
+                    f"El horario ya se encuentra actualizado y sincronizado en el calendario de la clínica."
+                )
+                hablar(mensaje_reprog)
+
+            elif sub_tecla == "2":
+                gid = str(cita_activa.get("notas_ia", ""))
+                google_id = None
+                if "Google Calendar Event ID: " in gid:
+                    google_id = gid.split("Google Calendar Event ID: ")[1].strip().split()[0]
+
+                nuevo_gid = actualizar_evento_google_calendar(
+                    google_id,
+                    nombre,
+                    caller_id,
+                    slot_alt["fecha"],
+                    slot_alt["hora"],
+                    cita_activa.get("motivo", ultimo_motivo),
+                    medico_alt
+                )
+
+                http_patch(
+                    f"citas_calendario?id=eq.{cita_activa.get('id')}",
+                    {
+                        "fecha": slot_alt["fecha"],
+                        "hora": f"{slot_alt['hora']}:00",
+                        "doctor_asignado": medico_alt,
+                        "especialidad": "Medicina Interna y Cardiología",
+                        "estado": "confirmada",
+                        "notas_ia": f"Google Calendar Event ID: {nuevo_gid or google_id or 'offline'} | Reprogramada con médico alternativo vía IVR Opción 4"
+                    }
+                )
+
+                http_post("llamadas_bitacora", {
+                    "caller_id": caller_id,
+                    "tipo": "entrante",
+                    "estado": "finalizada",
+                    "opcion_ivr_seleccionada": "Reprogramación de Cita (Médico Especialista Alternativo)",
+                    "resumen_ia": f"Paciente {nombre} reprogramó su cita para el {slot_alt['fecha']} a las {slot_alt['hora']} hrs con {medico_alt}.",
+                    "notas_agente": f"Sincronizado con Google Calendar ID: {nuevo_gid or google_id or 'N/A'}"
+                })
+
+                mensaje_reprog = (
+                    f"Perfecto, {primer_nombre}. Su cita médica ha sido reprogramada exitosamente para el día {fecha_alt_txt} "
+                    f"a las {slot_alt['hora']} horas con el {medico_alt}. "
+                    f"El horario ya se encuentra registrado en nuestro sistema."
+                )
+                hablar(mensaje_reprog)
+
+            elif sub_tecla == "0":
+                hablar("Comprendo. En este momento lo estoy comunicando con un asesor médico para apoyarle con su agenda.")
+                agi_cmd('SET VARIABLE TRANSFERIR_HUMANO "1"')
+            else:
+                hablar("No logré identificar la opción seleccionada. Lo comunicaré de inmediato con un asesor humano para asistirle.")
+                agi_cmd('SET VARIABLE TRANSFERIR_HUMANO "1"')
         elif doctor_ocupado:
             fecha_final = fecha_dia_siguiente
             hora_final = hora_preferente

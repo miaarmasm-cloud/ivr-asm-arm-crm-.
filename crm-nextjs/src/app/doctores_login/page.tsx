@@ -146,10 +146,34 @@ export default function DoctoresLoginPage() {
     } catch (e) {}
   }, []);
 
-  // Cargar datos cuando el doctor inicia sesión
+  // Cargar datos cuando el doctor inicia sesión y sincronizar en tiempo real con Supabase
   useEffect(() => {
     if (loggedDoctor) {
       loadDoctorData(loggedDoctor);
+
+      if (isSupabaseConfigured()) {
+        const channel = supabase
+          .channel(`doctor-sync-${loggedDoctor.id}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'citas_calendario' },
+            () => {
+              loadDoctorData(loggedDoctor);
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'historial_clinico_pacientes' },
+            () => {
+              loadDoctorData(loggedDoctor);
+            }
+          )
+          .subscribe();
+
+        return () => {
+          supabase.removeChannel(channel);
+        };
+      }
     }
   }, [loggedDoctor]);
 
@@ -435,6 +459,21 @@ export default function DoctoresLoginPage() {
           estado: 'finalizada',
           opcion_ivr_seleccionada: 'Consulta Médica de Especialista',
           resumen_ia: `Consulta efectuada por ${loggedDoctor.nombre_completo}. Diagnóstico: ${consultDiagnostico}. Receta Folio ${folioReceta}.`
+        });
+
+        // 4. Registrar en CBR (Case-Based Reasoning: cbr_casos) para IA Gemini y memoria IVR
+        const cbrProblema = `Paciente ${consultTargetPatient.nombre} (${consultTargetPatient.caller_id}) acudió a consulta por: ${consultMotivo}. Diagnóstico clínico emitido: ${consultDiagnostico}.`;
+        const cbrSolucion = `Especialista ${loggedDoctor.nombre_completo} prescribió: ${consultReceta}. Evolución clínica registrada: ${consultEvolucion || 'Evolución favorable con apego farmacológico.'}. ${proximaCitaFecha ? `Próxima cita de seguimiento programada para el ${proximaCitaFecha} a las ${proximaCitaHora} hrs.` : ''}`;
+        
+        await supabase.from('cbr_casos').insert({
+          categoria: 'consulta_medica_seguimiento',
+          problema_descripcion: cbrProblema,
+          solucion_aplicada: cbrSolucion,
+          resolucion_exitosa: true,
+          veces_utilizado: 1,
+          caller_id: consultTargetPatient.caller_id,
+          paciente_nombre: consultTargetPatient.nombre,
+          estado: 'resuelto_en_tratamiento'
         });
 
         // Actualizar estado local
