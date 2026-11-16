@@ -91,7 +91,32 @@ export interface HistorialClinico {
   diagnostico_previo: string;
   sugerencia_preventiva_ia: string;
   doctor_asignado?: string;
+  doctor_id?: string;
+  receta_medicamentos?: string;
+  notas_evolucion?: string;
+  signos_vitales?: {
+    presion?: string;
+    temperatura?: string;
+    fc?: string;
+    glucosa?: string;
+    peso?: string;
+  };
+  proxima_cita?: string;
+  folio_receta?: string;
   created_at?: string;
+}
+
+export interface Doctor {
+  id: string;
+  usuario: string;
+  password_hash?: string;
+  nombre_completo: string;
+  especialidad: string;
+  cedula_profesional: string;
+  email?: string;
+  telefono?: string;
+  consultorio?: string;
+  activo?: boolean;
 }
 
 export interface CbrCaso {

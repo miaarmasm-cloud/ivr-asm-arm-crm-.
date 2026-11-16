@@ -13,7 +13,9 @@ import {
   CheckCircle2, 
   X, 
   RotateCcw,
-  Volume2
+  Volume2,
+  Minimize2,
+  Maximize2
 } from 'lucide-react';
 import { getVMConfig } from '@/lib/config';
 
@@ -22,6 +24,10 @@ interface Props {
   autoStartCallTimestamp?: number;
   onCallInitiated: (number: string) => void;
   onCallEnded: (durationSeconds: number) => void;
+  isPopUp?: boolean;
+  onClose?: () => void;
+  isMinimized?: boolean;
+  onToggleMinimize?: () => void;
 }
 
 // Reproducción de frecuencias estándar DTMF vía Web Audio API
@@ -69,7 +75,11 @@ export default function WebRTCDialer({
   currentPhoneNumber, 
   autoStartCallTimestamp, 
   onCallInitiated, 
-  onCallEnded 
+  onCallEnded,
+  isPopUp = false,
+  onClose,
+  isMinimized = false,
+  onToggleMinimize
 }: Props) {
   const [dialNumber, setDialNumber] = useState(currentPhoneNumber || '1001');
   const [callStatus, setCallStatus] = useState<'idle' | 'calling' | 'ringing' | 'connected' | 'hold'>('idle');
@@ -288,9 +298,50 @@ export default function WebRTCDialer({
     return `${m}:${s}`;
   };
 
+  // Vista minimizada flotante del Softphone
+  if (isMinimized) {
+    return (
+      <div className="bg-slate-900 text-white p-3.5 px-4 rounded-2xl shadow-2xl border border-slate-700/80 flex items-center justify-between gap-3 min-w-[280px] sm:min-w-[320px]">
+        <div className="flex items-center gap-2.5">
+          <div className={`p-2 rounded-xl ${callStatus !== 'idle' ? 'bg-emerald-500/20 text-emerald-400 animate-pulse' : 'bg-slate-800 text-slate-300'}`}>
+            <Radio className="w-4 h-4" />
+          </div>
+          <div>
+            <span className="text-xs font-bold block text-white">
+              {callStatus === 'connected' ? `En Llamada: ${dialNumber}` : callStatus === 'calling' ? `Marcando: ${dialNumber}...` : 'Softphone Ext. 2001'}
+            </span>
+            <span className="text-[11px] text-emerald-400 font-mono font-medium">
+              {callStatus === 'connected' ? formatDuration(duration) : 'Asterisk 20 Online'}
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {onToggleMinimize && (
+            <button
+              onClick={onToggleMinimize}
+              className="p-1.5 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition"
+              title="Maximizar Softphone"
+            >
+              <Maximize2 className="w-4 h-4" />
+            </button>
+          )}
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-1.5 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 rounded-lg transition"
+              title="Cerrar Softphone"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-5 flex flex-col gap-3.5">
-      {/* Estado del Registro WebRTC en la VM */}
+    <div className={`bg-white rounded-2xl flex flex-col gap-3.5 p-5 ${isPopUp ? 'shadow-2xl border border-slate-300/80' : 'shadow-sm border border-slate-200/80'}`}>
+      {/* Estado del Registro WebRTC en la VM y Controles de Ventana */}
       <div className="flex items-center justify-between border-b border-slate-100 pb-3">
         <div className="flex items-center gap-2">
           <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg">
@@ -302,10 +353,36 @@ export default function WebRTCDialer({
           </div>
         </div>
 
-        <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1 font-mono">
-          <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping" />
-          Ext. 2001 Online
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1 font-mono">
+            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping" />
+            Ext. 2001
+          </span>
+          {isPopUp && (
+            <div className="flex items-center gap-1 ml-1 border-l border-slate-200 pl-1.5">
+              {onToggleMinimize && (
+                <button
+                  type="button"
+                  onClick={onToggleMinimize}
+                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
+                  title="Minimizar a barra inferior"
+                >
+                  <Minimize2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {onClose && (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                  title="Cerrar Softphone"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Pantalla LCD del Softphone */}

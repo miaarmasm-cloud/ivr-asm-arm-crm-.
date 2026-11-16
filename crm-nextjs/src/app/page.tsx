@@ -234,6 +234,10 @@ export default function CRMPage() {
   const [activeDialNumber, setActiveDialNumber] = useState('1001');
   const [autoStartCallTs, setAutoStartCallTs] = useState<number>(0);
 
+  // Softphone Pop-up Flotante (Aprovechamiento 100% de pantalla del CRM)
+  const [isSoftphoneOpen, setIsSoftphoneOpen] = useState(false);
+  const [isSoftphoneMinimized, setIsSoftphoneMinimized] = useState(false);
+
   // Pestaña activa principal: 'crm' | 'flow' | 'monitor' | 'medical' | 'campaigns'
   const [activeTab, setActiveTab] = useState<'crm' | 'flow' | 'monitor' | 'medical' | 'campaigns'>('crm');
 
@@ -528,6 +532,8 @@ export default function CRMPage() {
   const handleDirectOutboundCall = (phone: string) => {
     setActiveDialNumber(phone);
     setAutoStartCallTs(Date.now());
+    setIsSoftphoneOpen(true);
+    setIsSoftphoneMinimized(false);
     const cust = customers.find(c => c.caller_id === phone);
     setScreenPopData({
       callerId: phone,
@@ -691,6 +697,17 @@ export default function CRMPage() {
           >
             <Megaphone className="w-3.5 h-3.5" /> Campañas & DIDs
           </button>
+
+          <a
+            href="/doctores_login"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition text-amber-300 hover:text-white bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 shadow-xs"
+            title="Abrir Portal Clínico de Especialistas y Doctores (/doctores_login)"
+          >
+            <Stethoscope className="w-3.5 h-3.5 text-amber-400" />
+            <span>Portal Doctores (/doctores_login)</span>
+          </a>
         </div>
 
         {/* Acciones Rápidas: Estado VM, Simulación Screen-Pop y Agente */}
@@ -775,10 +792,24 @@ export default function CRMPage() {
             <PhoneOutgoing className="w-3.5 h-3.5 text-blue-200" /> Pop Outbound ({activeDialNumber})
           </button>
 
+          {/* Botón para Abrir Softphone Pop-up Flotante */}
+          <button
+            onClick={() => {
+              setIsSoftphoneOpen(true);
+              setIsSoftphoneMinimized(false);
+            }}
+            className="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-300 text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-2 shadow-sm transition active:scale-95"
+            title="Abrir Softphone SIP WebRTC en ventana emergente (Ext. 2001)"
+          >
+            <Phone className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Abrir Softphone</span>
+            <span className="w-2 h-2 bg-emerald-400 rounded-full animate-ping" />
+          </button>
+
           {/* Estado del Agente */}
           <div className="flex items-center gap-2 pl-2 border-l border-slate-800 text-xs text-slate-300">
             <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping" />
-            <span className="font-mono font-semibold">Ext. 2001 (Agente Online)</span>
+            <span className="font-mono font-semibold">Ext. 2001</span>
           </div>
         </div>
       </header>
@@ -851,8 +882,8 @@ export default function CRMPage() {
           />
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-            {/* Columna Izquierda: Directorio Ordenado y Búsqueda en Base de Datos (4 columnas) */}
-            <div className="xl:col-span-4 lg:col-span-4 space-y-4">
+            {/* Columna Izquierda: Directorio de Clientes (3 cols en xl, 4 en lg) */}
+            <div className="xl:col-span-3 lg:col-span-4 space-y-4">
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
@@ -1048,8 +1079,8 @@ export default function CRMPage() {
               </div>
             </div>
 
-            {/* Columna Central: Perfil 360 con Gestión de Desbloqueo, Bitácora y Calendario (5 columnas) */}
-            <div className="xl:col-span-5 lg:col-span-5 space-y-6">
+            {/* Columna Central Expandida (9 cols en xl, 8 en lg): Perfil 360, Gestión de Desbloqueo, Bitácora y Calendario */}
+            <div className="xl:col-span-9 lg:col-span-8 space-y-6">
               <CustomerProfile
                 customer={activeCustomer}
                 onSaveCustomer={handleSaveCustomer}
@@ -1077,38 +1108,64 @@ export default function CRMPage() {
                 />
               </div>
             </div>
-
-            {/* Columna Derecha: Dialer SIP WebRTC Outbound & Tarjeta VM (3 columnas) */}
-            <div className="xl:col-span-3 lg:col-span-3 space-y-6">
-              <WebRTCDialer
-                currentPhoneNumber={activeDialNumber}
-                autoStartCallTimestamp={autoStartCallTs}
-                onCallInitiated={(num) => {
-                  const cust = customers.find(c => c.caller_id === num);
-                  const newLog: CallLog = {
-                    id: `log-${Date.now()}`,
-                    caller_id: num,
-                    cliente_id: cust?.id || undefined,
-                    tipo: 'saliente',
-                    estado: 'en_curso',
-                    duracion_segundos: 0,
-                    opcion_ivr_seleccionada: 'Marcación WebRTC Outbound',
-                    resumen_ia: `Llamada saliente iniciada hacia ${num} (${cust?.nombre_completo || 'Destino Directo'})`,
-                    fecha_hora: new Date().toISOString()
-                  };
-                  setCallLogs(prev => [newLog, ...prev]);
-                  setRecentIncomingCallers(prev => [num, ...prev.filter(id => id !== num)]);
-                }}
-                onCallEnded={(dur) => {
-                  if (activeCustomer) {
-                    handleAddNote(`Llamada finalizada. Canal Asterisk liberado. Duración: ${dur} segundos.`);
-                  }
-                }}
-              />
-            </div>
           </div>
         )}
       </main>
+
+      {/* Pop-up Softphone SIP WebRTC Flotante (Reaprovecha el 100% de la pantalla del CRM) */}
+      {isSoftphoneOpen && (
+        <div className="fixed bottom-5 right-5 z-50 transition-all duration-300 max-w-[95vw]">
+          <div className="w-[340px] sm:w-[360px]">
+            <WebRTCDialer
+              isPopUp
+              isMinimized={isSoftphoneMinimized}
+              onToggleMinimize={() => setIsSoftphoneMinimized(!isSoftphoneMinimized)}
+              onClose={() => setIsSoftphoneOpen(false)}
+              currentPhoneNumber={activeDialNumber}
+              autoStartCallTimestamp={autoStartCallTs}
+              onCallInitiated={(num) => {
+                const cust = customers.find(c => c.caller_id === num);
+                const newLog: CallLog = {
+                  id: `log-${Date.now()}`,
+                  caller_id: num,
+                  cliente_id: cust?.id || undefined,
+                  tipo: 'saliente',
+                  estado: 'en_curso',
+                  duracion_segundos: 0,
+                  opcion_ivr_seleccionada: 'Marcación WebRTC Outbound',
+                  resumen_ia: `Llamada saliente iniciada hacia ${num} (${cust?.nombre_completo || 'Destino Directo'})`,
+                  fecha_hora: new Date().toISOString()
+                };
+                setCallLogs(prev => [newLog, ...prev]);
+                setRecentIncomingCallers(prev => [num, ...prev.filter(id => id !== num)]);
+              }}
+              onCallEnded={(dur) => {
+                if (activeCustomer) {
+                  handleAddNote(`Llamada finalizada. Canal Asterisk liberado. Duración: ${dur} segundos.`);
+                }
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Botón Flotante (FAB) para abrir Softphone cuando esté cerrado */}
+      {!isSoftphoneOpen && (
+        <button
+          onClick={() => {
+            setIsSoftphoneOpen(true);
+            setIsSoftphoneMinimized(false);
+          }}
+          className="fixed bottom-6 right-6 z-40 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white px-4 py-3 rounded-full shadow-2xl flex items-center gap-2.5 font-bold text-xs transition-all hover:scale-105 active:scale-95 group border-2 border-white/40"
+          title="Abrir Softphone SIP WebRTC (Ext. 2001)"
+        >
+          <div className="relative">
+            <Phone className="w-4 h-4 group-hover:rotate-12 transition-transform" />
+            <span className="w-2 h-2 bg-emerald-300 rounded-full absolute -top-1 -right-1 animate-ping" />
+          </div>
+          <span className="font-mono">Softphone (2001)</span>
+        </button>
+      )}
 
       {/* Modal de Screen-Pop (Llamada entrante o saliente con incidencia del momento) */}
       {screenPopData && (
