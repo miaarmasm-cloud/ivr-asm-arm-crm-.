@@ -30,6 +30,7 @@ import os
 import json
 import time
 import datetime
+import uuid
 import urllib.request
 import urllib.parse
 import subprocess
@@ -223,7 +224,7 @@ def get_google_access_token():
         return None
 
 def verificar_disponibilidad_google_calendar(fecha, hora):
-    """Consulta la API de Google Calendar en vivo para ver si la hora solicitada está ocupada."""
+    """Consulta la API de Google Calendar en vivo para ver si la hora solicitada está ocupada, filtrando eventos cancelados o liberados."""
     token = get_google_access_token()
     if not token:
         return False
@@ -237,7 +238,13 @@ def verificar_disponibilidad_google_calendar(fecha, hora):
             if resp.status == 200:
                 data = json.loads(resp.read().decode())
                 items = data.get("items", [])
-                return len(items) > 0
+                active_items = [
+                    it for it in items 
+                    if it.get("status") != "cancelled" 
+                    and "cancelad" not in str(it.get("summary", "")).lower()
+                    and "liberad" not in str(it.get("summary", "")).lower()
+                ]
+                return len(active_items) > 0
     except Exception as e:
         sys.stderr.write(f"Google Calendar check error: {e}\n")
     return False
@@ -449,8 +456,8 @@ def consultar_casos_cbr(caller_id):
 
 def generar_evolucion_clinica_cbr_gemini(paciente, fecha_consulta, doctor, diagnostico, recomendacion, receta=None, notas_evolucion=None, casos_cbr=None):
     """
-    Sintetiza la memoria clínica del caso CBR y la evolución médica del paciente mediante Gemini IA / CBR Fallback.
-    Explica cómo se fue resolviendo el cuadro, la evolución favorable y las indicaciones vigentes.
+    Sintetiza la memoria clínica del caso CBR y la evolución médica del paciente mediante Gemini IA con estricta supervisión médica.
+    Explica cómo se fue resolviendo el cuadro, la evolución favorable y las indicaciones vigentes validadas por su médico con cédula.
     """
     fecha_txt = formatear_fecha_es(fecha_consulta) if fecha_consulta else "recientemente"
     diag_clean = (diagnostico or "Revisión clínica preventiva").replace("\n", " ").strip()
@@ -462,9 +469,13 @@ def generar_evolucion_clinica_cbr_gemini(paciente, fecha_consulta, doctor, diagn
         rec_clean = rec_clean[:130].rsplit('.', 1)[0] + "."
 
     cbr_resolucion = ""
+    doc_supervisor = doctor
+    rec_supervisada = ""
     if casos_cbr and len(casos_cbr) > 0:
         cbr_ult = casos_cbr[0]
         cbr_resolucion = str(cbr_ult.get("solucion_aplicada", "")).replace("\n", " ").strip()
+        doc_supervisor = cbr_ult.get("doctor_asignado") or doctor
+        rec_supervisada = str(cbr_ult.get("recomendacion_supervisada") or "").strip()
         if len(cbr_resolucion) > 130:
             cbr_resolucion = cbr_resolucion[:130].rsplit('.', 1)[0] + "."
 
@@ -472,13 +483,14 @@ def generar_evolucion_clinica_cbr_gemini(paciente, fecha_consulta, doctor, diagn
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
             prompt = (
-                f"Eres el agente médico telefónico del conmutador de la clínica ARM. "
-                f"El paciente {paciente} acudió a consulta el {fecha_txt} con la {doctor}. "
-                f"Diagnóstico emitido: {diag_clean}. "
-                f"Tratamiento prescrito: {rec_clean}. "
-                f"Memoria clínica CBR de cómo fue resolviendo su caso y su evolución: {cbr_resolucion or notas_evolucion}. "
+                f"Eres el agente médico telefónico supervisado de la clínica ARM. "
+                f"El paciente {paciente} acudió a consulta el {fecha_txt} con su médico supervisor la {doc_supervisor}. "
+                f"Diagnóstico certificado por el médico: {diag_clean}. "
+                f"Tratamiento prescrito y supervisado: {rec_clean}. "
+                f"Memoria clínica CBR de evolución y cómo fue resolviendo su caso: {cbr_resolucion or notas_evolucion}. "
+                f"Instrucción médica de apego supervisado: {rec_supervisada or 'Cumplir estrictamente con el tratamiento prescrito sin modificaciones sin autorización médica.'} "
                 f"Genera exactamente 2 oraciones breves, amables y claras en español de México para leer en voz alta por teléfono, "
-                f"haciendo referencia a su caso clínico, a cómo ha ido resolviendo su evolución con su médico de cabecera y el tratamiento que debe continuar."
+                f"haciendo referencia a su caso clínico, confirmando que las recomendaciones están supervisadas por su médico de cabecera y enfatizando el apego a su tratamiento."
             )
             body = {"contents": [{"parts": [{"text": prompt}]}]}
             req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
@@ -489,17 +501,17 @@ def generar_evolucion_clinica_cbr_gemini(paciente, fecha_consulta, doctor, diagn
         except Exception as e:
             sys.stderr.write(f"Gemini API CBR Evolution Fallback: {e}\n")
 
-    # Fallback clínico experto CBR
+    # Fallback clínico experto CBR supervisado
     if cbr_resolucion:
         return (
-            f"En su expediente médico y memoria clínica CBR tenemos registrado el hito de su última consulta del {fecha_txt} atendida por su doctora de cabecera, la {doctor}. "
-            f"Revisando la evolución de su caso sobre {diag_clean}, observamos que se encuentra en resolución favorable bajo tratamiento médico. "
-            f"Le recordamos continuar puntualmente con su indicación de: {rec_clean}."
+            f"En su expediente médico y memoria clínica CBR tenemos registrado el hito de su última consulta del {fecha_txt} atendida por su doctora de cabecera, la {doc_supervisor}. "
+            f"Revisando la evolución de su caso sobre {diag_clean}, observamos que se encuentra en resolución favorable bajo tratamiento médico supervisado. "
+            f"Por indicación de su doctora, le recordamos continuar rigurosamente con su tratamiento: {rec_clean}."
         )
     return (
-        f"En su expediente médico tenemos registrado el hito de su última consulta del {fecha_txt} atendida por su doctora de cabecera, la {doctor}. "
-        f"Su nuevo diagnóstico actualizado es: {diag_clean}. "
-        f"Y su recomendación y receta médica es: {rec_clean}."
+        f"En su expediente médico tenemos registrado el hito de su última consulta del {fecha_txt} atendida y supervisada por su doctora de cabecera, la {doc_supervisor}. "
+        f"Su diagnóstico actualizado es: {diag_clean}. "
+        f"Y su recomendación médica supervisada es: {rec_clean}."
     )
 
 def generar_hito_clinico_gemini(paciente, fecha_consulta, doctor, diagnostico, recomendacion, receta=None):
@@ -514,6 +526,10 @@ def generar_hito_clinico_gemini(paciente, fecha_consulta, doctor, diagnostico, r
 def main():
     agi_env = leer_variables_agi()
     caller_id = sys.argv[1] if len(sys.argv) > 1 else agi_env.get("agi_callerid", "1001")
+
+    # Identificador de Sesión de Llamada y Folio de Hito Clínico Concatenado
+    call_session_uuid = str(uuid.uuid4())
+    folio_hito = f"HITO-{caller_id}-{datetime.date.today().strftime('%Y%m%d')}-{call_session_uuid[:8].upper()}"
 
     # 1. Obtener datos del paciente y su historial clínico (CBR)
     # Soporte para normalización de CallerID con o sin prefijo 77
@@ -543,6 +559,16 @@ def main():
 
     # 2. Identificar médico de cabecera, hito clínico reciente, diagnóstico, prescripción y memoria CBR
     casos_cbr = consultar_casos_cbr(caller_id)
+    if casos_cbr:
+        caso_id = casos_cbr[0].get("id")
+        http_patch(
+            f"cbr_casos?id=eq.{caso_id}",
+            {
+                "llamada_id": call_session_uuid,
+                "folio_hito": folio_hito,
+                "veces_utilizado": (casos_cbr[0].get("veces_utilizado") or 1) + 1
+            }
+        )
     doctor_cabecera = historial.get("doctor_asignado", "Dra. Mariana Fernández") if historial else "Dra. Mariana Fernández"
     ultimo_motivo = historial.get("ultimo_motivo", "Revisión de presión arterial y chequeo general") if historial else "Consulta general"
     diagnostico_actual = historial.get("diagnostico_previo", "") if historial else ""
@@ -671,12 +697,16 @@ def main():
             )
             hablar(mensaje_exito)
             http_post("llamadas_bitacora", {
+                "id": call_session_uuid,
                 "caller_id": caller_id,
+                "cliente_id": cliente.get("id") if cliente else None,
                 "tipo": "entrante",
                 "estado": "finalizada",
                 "opcion_ivr_seleccionada": "Confirmación de Cita de Seguimiento",
                 "resumen_ia": f"Paciente {nombre} ratificó asistencia a cita del {cita_activa.get('fecha')} con {cita_activa.get('doctor_asignado', doctor_cabecera)}.",
-                "notas_agente": f"Folio cita: {cita_activa.get('id')}"
+                "notas_agente": f"Folio Hito: {folio_hito} | Folio cita: {cita_activa.get('id')}",
+                "folio_hito": folio_hito,
+                "caso_cbr_id": casos_cbr[0].get("id") if casos_cbr else None
             })
             return
 
@@ -720,18 +750,22 @@ def main():
             "motivo": sugerencia_preventiva,
             "estado": "confirmada",
             "doctor_asignado": doctor_final,
-            "notas_ia": f"Google Calendar Event ID: {g_id or 'offline'} | Agendado por Opción 4 del IVR"
+            "notas_ia": f"Call Session UUID: {call_session_uuid} | Folio Hito: {folio_hito} | Google Calendar Event ID: {g_id or 'offline'} | Agendado por Opción 4 del IVR"
         }
         http_post("citas_calendario", payload_cita)
 
         # 3. Notificar en bitácora para Screen-Pop en el CRM
         http_post("llamadas_bitacora", {
+            "id": call_session_uuid,
             "caller_id": caller_id,
+            "cliente_id": cliente.get("id") if cliente else None,
             "tipo": "entrante",
             "estado": "finalizada",
             "opcion_ivr_seleccionada": "4. Citas Médicas (Google Calendar Homologado)",
             "resumen_ia": f"Cita confirmada con {doctor_final} el {fecha_final} a las {hora_final} hrs para {nombre}. Motivo: {sugerencia_preventiva}.",
-            "notas_agente": f"Sincronizado con Google Calendar ID: {g_id or 'N/A'}"
+            "notas_agente": f"Folio Hito: {folio_hito} | Sincronizado con Google Calendar ID: {g_id or 'N/A'}",
+            "folio_hito": folio_hito,
+            "caso_cbr_id": casos_cbr[0].get("id") if casos_cbr else None
         })
 
         hablar(mensaje_exito)
@@ -793,17 +827,21 @@ def main():
                         "doctor_asignado": doctor_cabecera,
                         "especialidad": "Medicina Familiar y Preventiva",
                         "estado": "confirmada",
-                        "notas_ia": f"Google Calendar Event ID: {nuevo_gid or google_id or 'offline'} | Reprogramada con médico de cabecera vía IVR Opción 4"
+                        "notas_ia": f"Call Session UUID: {call_session_uuid} | Folio Hito: {folio_hito} | Google Calendar Event ID: {nuevo_gid or google_id or 'offline'} | Reprogramada con médico de cabecera vía IVR Opción 4"
                     }
                 )
 
                 http_post("llamadas_bitacora", {
+                    "id": call_session_uuid,
                     "caller_id": caller_id,
+                    "cliente_id": cliente.get("id") if cliente else None,
                     "tipo": "entrante",
                     "estado": "finalizada",
                     "opcion_ivr_seleccionada": "Reprogramación de Cita (Médico de Cabecera)",
                     "resumen_ia": f"Paciente {nombre} reprogramó su cita para el {slot_doc['fecha']} a las {slot_doc['hora']} hrs con {doctor_cabecera}.",
-                    "notas_agente": f"Sincronizado con Google Calendar ID: {nuevo_gid or google_id or 'N/A'}"
+                    "notas_agente": f"Folio Hito: {folio_hito} | Sincronizado con Google Calendar ID: {nuevo_gid or google_id or 'N/A'}",
+                    "folio_hito": folio_hito,
+                    "caso_cbr_id": casos_cbr[0].get("id") if casos_cbr else None
                 })
 
                 mensaje_reprog = (
@@ -837,17 +875,21 @@ def main():
                         "doctor_asignado": medico_alt,
                         "especialidad": "Medicina Interna y Cardiología",
                         "estado": "confirmada",
-                        "notas_ia": f"Google Calendar Event ID: {nuevo_gid or google_id or 'offline'} | Reprogramada con médico alternativo vía IVR Opción 4"
+                        "notas_ia": f"Call Session UUID: {call_session_uuid} | Folio Hito: {folio_hito} | Google Calendar Event ID: {nuevo_gid or google_id or 'offline'} | Reprogramada con médico alternativo vía IVR Opción 4"
                     }
                 )
 
                 http_post("llamadas_bitacora", {
+                    "id": call_session_uuid,
                     "caller_id": caller_id,
+                    "cliente_id": cliente.get("id") if cliente else None,
                     "tipo": "entrante",
                     "estado": "finalizada",
                     "opcion_ivr_seleccionada": "Reprogramación de Cita (Médico Especialista Alternativo)",
                     "resumen_ia": f"Paciente {nombre} reprogramó su cita para el {slot_alt['fecha']} a las {slot_alt['hora']} hrs con {medico_alt}.",
-                    "notas_agente": f"Sincronizado con Google Calendar ID: {nuevo_gid or google_id or 'N/A'}"
+                    "notas_agente": f"Folio Hito: {folio_hito} | Sincronizado con Google Calendar ID: {nuevo_gid or google_id or 'N/A'}",
+                    "folio_hito": folio_hito,
+                    "caso_cbr_id": casos_cbr[0].get("id") if casos_cbr else None
                 })
 
                 mensaje_reprog = (

@@ -452,16 +452,23 @@ export default function DoctoresLoginPage() {
           });
         }
 
-        // 3. Registrar en llamadas_bitacora
+        // Identificador de sesión y Folio de Hito homologado
+        const sessionUUID = crypto.randomUUID();
+        const folioHito = `HITO-${consultTargetPatient.caller_id}-${todayStr.replace(/-/g, '')}-${sessionUUID.slice(0, 8).toUpperCase()}`;
+
+        // 3. Registrar en llamadas_bitacora con trazabilidad unificada
         await supabase.from('llamadas_bitacora').insert({
+          id: sessionUUID,
           caller_id: consultTargetPatient.caller_id,
           tipo: 'saliente',
           estado: 'finalizada',
           opcion_ivr_seleccionada: 'Consulta Médica de Especialista',
-          resumen_ia: `Consulta efectuada por ${loggedDoctor.nombre_completo}. Diagnóstico: ${consultDiagnostico}. Receta Folio ${folioReceta}.`
+          resumen_ia: `Consulta efectuada por ${loggedDoctor.nombre_completo}. Diagnóstico: ${consultDiagnostico}. Receta Folio ${folioReceta}.`,
+          notas_agente: `Folio Hito: ${folioHito} | Folio Receta: ${folioReceta}`,
+          folio_hito: folioHito
         });
 
-        // 4. Registrar en CBR (Case-Based Reasoning: cbr_casos) para IA Gemini y memoria IVR
+        // 4. Registrar en CBR (Case-Based Reasoning: cbr_casos) con UUID y Folio de Hito homologado
         const cbrProblema = `Paciente ${consultTargetPatient.nombre} (${consultTargetPatient.caller_id}) acudió a consulta por: ${consultMotivo}. Diagnóstico clínico emitido: ${consultDiagnostico}.`;
         const cbrSolucion = `Especialista ${loggedDoctor.nombre_completo} prescribió: ${consultReceta}. Evolución clínica registrada: ${consultNotas || 'Evolución favorable con apego farmacológico.'}. ${proximaCitaFecha ? `Próxima cita de seguimiento programada para el ${proximaCitaFecha} a las ${proximaCitaHora} hrs.` : ''}`;
         
@@ -473,7 +480,11 @@ export default function DoctoresLoginPage() {
           veces_utilizado: 1,
           caller_id: consultTargetPatient.caller_id,
           paciente_nombre: consultTargetPatient.nombre,
-          estado: 'resuelto_en_tratamiento'
+          estado: 'resuelto_en_tratamiento',
+          llamada_id: sessionUUID,
+          folio_hito: folioHito,
+          doctor_asignado: loggedDoctor.nombre_completo,
+          recomendacion_supervisada: `Tratamiento y evolución supervisados por ${loggedDoctor.nombre_completo} (${loggedDoctor.cedula_profesional}). Diagnóstico certificado: ${consultDiagnostico}. Cumplir estrictamente con el apego farmacológico indicado.`
         });
 
         // Actualizar estado local
