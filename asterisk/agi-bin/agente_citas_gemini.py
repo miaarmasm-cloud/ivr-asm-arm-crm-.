@@ -375,8 +375,6 @@ def resolver_id_paciente(cliente, caller_id):
     # Generador determinístico de 7 dígitos si no está en base
     num_seed = sum(ord(c) for c in clean_cid) * 12345
     return f"PAC-{1000000 + (num_seed % 8999999)}"
-    except Exception:
-        return str(fecha_iso)
 
 def calcular_siguiente_dia_laboral():
     hoy = datetime.date.today()
