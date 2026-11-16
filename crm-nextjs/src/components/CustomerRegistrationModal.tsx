@@ -210,9 +210,9 @@ export default function CustomerRegistrationModal({
             numero_tarjeta_mask: payload.numero_tarjeta_mask || '',
             saldo: payload.saldo ?? 0,
             estatus_tarjeta: payload.estatus_tarjeta ?? 1,
-            fecha_nacimiento: payload.fecha_nacimiento,
-            agente_asignado: payload.agente_asignado,
-            telefonos_adicionales: payload.telefonos_adicionales,
+            fecha_nacimiento: payload.fecha_nacimiento || '1990-01-01',
+            agente_asignado: payload.agente_asignado || 'Ext. 2001',
+            telefonos_adicionales: payload.telefonos_adicionales || [],
             compras_previas: []
           };
           onCustomerSaved(fakeCustomer, true);
@@ -267,8 +267,8 @@ export default function CustomerRegistrationModal({
             numero_tarjeta_mask: payload.numero_tarjeta_mask || initialCustomer?.numero_tarjeta_mask || '',
             saldo: payload.saldo ?? initialCustomer?.saldo ?? 0,
             estatus_tarjeta: payload.estatus_tarjeta ?? initialCustomer?.estatus_tarjeta ?? 1,
-            fecha_nacimiento: payload.fecha_nacimiento || initialCustomer?.fecha_nacimiento,
-            agente_asignado: payload.agente_asignado || initialCustomer?.agente_asignado,
+            fecha_nacimiento: payload.fecha_nacimiento || initialCustomer?.fecha_nacimiento || '1990-01-01',
+            agente_asignado: payload.agente_asignado || initialCustomer?.agente_asignado || 'Ext. 2001',
             telefonos_adicionales: payload.telefonos_adicionales || initialCustomer?.telefonos_adicionales || []
           };
           onCustomerSaved(updated, false);
