@@ -1461,20 +1461,36 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-800 truncate max-w-[160px]">
-                        {cita.paciente_nombre}
-                      </span>
-                      <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          isConfirmed 
-                            ? 'bg-teal-100 text-teal-800' 
-                            : isCancelled 
-                            ? 'bg-rose-100 text-rose-800' 
-                            : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {cita.estado}
-                      </span>
+                      <div className="flex items-center gap-1.5 truncate max-w-[200px]">
+                        <span className="font-bold text-slate-800 truncate">
+                          {cita.paciente_nombre}
+                        </span>
+                        {cita.id_paciente && (
+                          <span className="text-[9px] font-mono bg-purple-100 text-purple-800 px-1.5 py-0.2 rounded font-bold">
+                            {cita.id_paciente}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {cita.folio_cita && (
+                          <span className="text-[9px] font-mono bg-blue-50 text-blue-800 border border-blue-200 px-1.5 py-0.2 rounded font-bold">
+                            {cita.folio_cita}
+                          </span>
+                        )}
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            cita.estado === 'atendida'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : isConfirmed 
+                              ? 'bg-teal-100 text-teal-800' 
+                              : isCancelled 
+                              ? 'bg-rose-100 text-rose-800' 
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {cita.estado}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="flex items-center justify-between text-[11px] text-slate-600">
@@ -1503,16 +1519,28 @@ export default function MedicalConsultations({ onCallPatient }: MedicalConsultat
                       </p>
                     )}
 
-                    {isConfirmed && (
-                      <div className="flex justify-end pt-1">
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                      {cita.checkin_estado === 'checkin_realizado' ? (
+                        <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded flex items-center gap-1">
+                          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Check-In Realizado
+                        </span>
+                      ) : isConfirmed ? (
+                        <span className="text-[9px] text-amber-700 font-medium">
+                          ⏳ Esperando Check-In
+                        </span>
+                      ) : (
+                        <span />
+                      )}
+
+                      {isConfirmed && (
                         <button
                           onClick={() => handleCancelarCita(cita.id)}
                           className="text-[10px] text-rose-600 hover:text-rose-800 font-bold flex items-center gap-1"
                         >
                           <XCircle className="w-3 h-3" /> Cancelar Cita
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 );
               })}

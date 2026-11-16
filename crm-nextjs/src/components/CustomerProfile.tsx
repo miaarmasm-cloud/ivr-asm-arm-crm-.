@@ -250,6 +250,11 @@ export default function CustomerProfile({
             <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2.5 py-0.5 rounded-full font-mono">
               CallerID: {formData.caller_id}
             </span>
+            {formData.id_paciente && (
+              <span className="bg-purple-100 text-purple-900 border border-purple-300 text-xs font-bold px-2.5 py-0.5 rounded-full font-mono">
+                ID Paciente: {formData.id_paciente}
+              </span>
+            )}
             <span className="bg-slate-100 text-slate-700 text-xs px-2.5 py-0.5 rounded-full flex items-center gap-1">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> Verificado por PBX
             </span>

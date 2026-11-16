@@ -308,7 +308,7 @@ export default function CRMPage() {
           const { data, error } = await supabase
             .from('clientes')
             .select('*')
-            .or(`caller_id.ilike.%${q}%,nombre_completo.ilike.%${q}%,empresa.ilike.%${q}%,numero_tarjeta_mask.ilike.%${q}%,folio_cancelacion.ilike.%${q}%`)
+            .or(`caller_id.ilike.%${q}%,nombre_completo.ilike.%${q}%,empresa.ilike.%${q}%,numero_tarjeta_mask.ilike.%${q}%,folio_cancelacion.ilike.%${q}%,id_paciente.ilike.%${q}%`)
             .order('updated_at', { ascending: false })
             .limit(25);
           
@@ -326,7 +326,8 @@ export default function CRMPage() {
           c.nombre_completo.toLowerCase().includes(q.toLowerCase()) ||
           c.empresa.toLowerCase().includes(q.toLowerCase()) ||
           c.numero_tarjeta_mask.toLowerCase().includes(q.toLowerCase()) ||
-          (c.folio_cancelacion && c.folio_cancelacion.toLowerCase().includes(q.toLowerCase()))
+          (c.folio_cancelacion && c.folio_cancelacion.toLowerCase().includes(q.toLowerCase())) ||
+          (c.id_paciente && c.id_paciente.toLowerCase().includes(q.toLowerCase()))
         );
         setDbSearchResults(filtered);
       }
@@ -1018,9 +1019,16 @@ export default function CRMPage() {
                           <span className="font-bold text-slate-800 text-xs leading-snug break-words flex-1">
                             {cust.nombre_completo}
                           </span>
-                          <span className="text-[10px] font-mono bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-md font-bold shrink-0">
-                            {cust.caller_id}
-                          </span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {cust.id_paciente && (
+                              <span className="text-[9px] font-mono bg-purple-100 text-purple-800 px-1 py-0.5 rounded font-bold">
+                                {cust.id_paciente}
+                              </span>
+                            )}
+                            <span className="text-[10px] font-mono bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-md font-bold">
+                              {cust.caller_id}
+                            </span>
+                          </div>
                         </div>
 
                         {/* Subtítulo y Empresa */}

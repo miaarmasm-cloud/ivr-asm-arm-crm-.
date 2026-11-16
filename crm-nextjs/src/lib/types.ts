@@ -1,6 +1,7 @@
 export interface Customer {
   id: string;
   caller_id: string; // Identificador primario de número telefónico
+  id_paciente?: string; // ID único de expediente médico (ej. PAC-1089754)
   nombre_completo: string;
   empresa: string;
   direccion: string;
@@ -69,12 +70,16 @@ export interface CitaMedica {
   id: string;
   caller_id: string;
   cliente_id?: string | null;
+  id_paciente?: string; // ID único de expediente médico (ej. PAC-1089754)
+  folio_cita?: string;   // Folio oficial de check-in / cita (ej. CIT-0921-8421)
   paciente_nombre: string;
   fecha: string; // YYYY-MM-DD
   hora: string;  // HH:MM
   especialidad: string;
   motivo: string;
   estado: 'confirmada' | 'cancelada' | 'en_espera' | 'completada' | 'atendida' | 'reprogramada';
+  checkin_estado?: 'pendiente' | 'checkin_realizado' | 'atendida' | 'cancelada';
+  checkin_hora?: string;
   doctor_asignado?: string;
   notas_ia?: string;
   created_at?: string;
@@ -85,6 +90,8 @@ export interface HistorialClinico {
   id: string;
   caller_id: string;
   cliente_id?: string | null;
+  id_paciente?: string; // ID único de expediente médico
+  folio_cita?: string;   // Folio de cita vinculado
   paciente_nombre: string;
   fecha_ultima_consulta: string;
   ultimo_motivo: string;
@@ -123,11 +130,14 @@ export interface CbrCaso {
   id: string;
   categoria: string;
   caller_id?: string;
+  id_paciente?: string;
+  folio_cita?: string;
+  folio_receta?: string;
   paciente_nombre?: string;
   problema_descripcion: string;
   solucion_aplicada?: string;
   resolucion_exitosa: boolean;
   veces_utilizado?: number;
-  estado?: 'pendiente_humano' | 'resuelto_entrenado';
+  estado?: 'pendiente_humano' | 'resuelto_entrenado' | 'resuelto_en_tratamiento';
   created_at?: string;
 }

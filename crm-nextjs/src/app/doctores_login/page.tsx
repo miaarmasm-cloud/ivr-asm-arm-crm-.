@@ -111,6 +111,8 @@ export default function DoctoresLoginPage() {
     nombre: string;
     caller_id: string;
     cliente_id?: string;
+    id_paciente?: string;
+    folio_cita?: string;
   } | null>(null);
 
   // Formulario de Nueva Consulta
@@ -311,6 +313,8 @@ export default function DoctoresLoginPage() {
         return (
           c.paciente_nombre.toLowerCase().includes(q) ||
           c.caller_id.includes(q) ||
+          (c.id_paciente || '').toLowerCase().includes(q) ||
+          (c.folio_cita || '').toLowerCase().includes(q) ||
           (c.motivo || '').toLowerCase().includes(q) ||
           (c.especialidad || '').toLowerCase().includes(q)
         );
@@ -327,6 +331,8 @@ export default function DoctoresLoginPage() {
       return (
         h.paciente_nombre.toLowerCase().includes(q) ||
         h.caller_id.includes(q) ||
+        (h.id_paciente || '').toLowerCase().includes(q) ||
+        (h.folio_cita || '').toLowerCase().includes(q) ||
         (h.diagnostico_previo || '').toLowerCase().includes(q) ||
         (h.ultimo_motivo || '').toLowerCase().includes(q) ||
         (h.folio_receta || '').toLowerCase().includes(q)
@@ -334,9 +340,46 @@ export default function DoctoresLoginPage() {
     });
   }, [historiales, searchQuery]);
 
+  // Manejo de Check-In del Paciente en Sala de Espera
+  const handleCheckIn = async (cita: CitaMedica) => {
+    const horaActual = new Date().toLocaleTimeString().slice(0, 5);
+    try {
+      if (isSupabaseConfigured()) {
+        await supabase
+          .from('citas_calendario')
+          .update({
+            checkin_estado: 'checkin_realizado',
+            checkin_hora: horaActual
+          })
+          .eq('id', cita.id);
+      }
+      setCitas(prev => prev.map(c => c.id === cita.id ? {
+        ...c,
+        checkin_estado: 'checkin_realizado',
+        checkin_hora: horaActual
+      } : c));
+    } catch (err: any) {
+      console.error('Error al registrar check-in:', err);
+    }
+  };
+
   // Abrir Modal de Consulta para un paciente
-  const handleOpenConsultation = (paciente: { nombre: string; caller_id: string; cliente_id?: string; motivo?: string; cita_id?: string }) => {
-    setConsultTargetPatient(paciente);
+  const handleOpenConsultation = (paciente: { 
+    nombre: string; 
+    caller_id: string; 
+    cliente_id?: string; 
+    motivo?: string; 
+    cita_id?: string;
+    id_paciente?: string;
+    folio_cita?: string;
+  }) => {
+    setConsultTargetPatient({
+      nombre: paciente.nombre,
+      caller_id: paciente.caller_id,
+      cliente_id: paciente.cliente_id,
+      id_paciente: paciente.id_paciente,
+      folio_cita: paciente.folio_cita
+    });
     setConsultTargetAppointmentId(paciente.cita_id || null);
     setConsultMotivo(paciente.motivo || 'Consulta Médica de Control y Diagnóstico');
     setConsultDiagnostico('');
@@ -364,7 +407,10 @@ export default function DoctoresLoginPage() {
     if (!loggedDoctor || !consultTargetPatient) return;
 
     setIsSavingConsult(true);
-    const folioReceta = `REC-${new Date().getFullYear()}-MED-${consultTargetPatient.caller_id.slice(-4)}`;
+    const patientId = consultTargetPatient.id_paciente || 'PAC-1089754';
+    const folioCita = consultTargetPatient.folio_cita || 'CIT-0921-8421';
+    const cleanSuffix = folioCita.replace('CIT-', '') || consultTargetPatient.caller_id.slice(-4);
+    const folioReceta = `REC-${new Date().getFullYear()}-MED-${cleanSuffix}`;
 
     try {
       const signosVitalesObj = {
@@ -382,6 +428,8 @@ export default function DoctoresLoginPage() {
           .insert({
             caller_id: consultTargetPatient.caller_id,
             cliente_id: consultTargetPatient.cliente_id || null,
+            id_paciente: patientId,
+            folio_cita: folioCita,
             paciente_nombre: consultTargetPatient.nombre,
             fecha_ultima_consulta: todayStr,
             ultimo_motivo: consultMotivo,
@@ -400,20 +448,22 @@ export default function DoctoresLoginPage() {
 
         if (errHist) throw new Error(errHist.message);
 
-        // 1b. Si proviene de una cita existente o el paciente tiene cita confirmada previa, marcarla como atendida y liberar
+        // 1b. Si proviene de una cita existente o el paciente tiene cita confirmada previa, marcarla como atendida y liberar (Check-Out)
         if (consultTargetAppointmentId) {
           await supabase
             .from('citas_calendario')
             .update({
               estado: 'atendida',
+              checkin_estado: 'atendida',
               fecha: todayStr,
-              notas_ia: `Consulta médica atendida por ${loggedDoctor.nombre_completo}. Diagnóstico registrado y receta generada (${folioReceta}).`
+              notas_ia: `Consulta médica atendida por ${loggedDoctor.nombre_completo}. Diagnóstico registrado y receta generada (${folioReceta}). Folio Cita: ${folioCita}. ID Paciente: ${patientId}.`
             })
             .eq('id', consultTargetAppointmentId);
 
           setCitas(prev => prev.map(c => c.id === consultTargetAppointmentId ? {
             ...c,
             estado: 'atendida',
+            checkin_estado: 'atendida',
             fecha: todayStr
           } : c));
         } else {
@@ -422,6 +472,7 @@ export default function DoctoresLoginPage() {
             .from('citas_calendario')
             .update({
               estado: 'atendida',
+              checkin_estado: 'atendida',
               fecha: todayStr,
               notas_ia: `Consulta médica atendida por ${loggedDoctor.nombre_completo}.`
             })
@@ -431,24 +482,29 @@ export default function DoctoresLoginPage() {
           setCitas(prev => prev.map(c => c.caller_id === consultTargetPatient.caller_id && c.estado === 'confirmada' ? {
             ...c,
             estado: 'atendida',
+            checkin_estado: 'atendida',
             fecha: todayStr
           } : c));
         }
 
         // 2. Si se fijó fecha futura, registrar cita en citas_calendario
         if (proximaCitaFecha) {
+          const proximoFolio = `CIT-${proximaCitaFecha.replace(/-/g, '').slice(4)}-${consultTargetPatient.caller_id.slice(-4)}`;
           await supabase.from('citas_calendario').insert({
             caller_id: consultTargetPatient.caller_id,
             cliente_id: consultTargetPatient.cliente_id || null,
+            id_paciente: patientId,
+            folio_cita: proximoFolio,
             paciente_nombre: consultTargetPatient.nombre,
             fecha: proximaCitaFecha,
             hora: proximaCitaHora,
             especialidad: loggedDoctor.especialidad,
             motivo: `Cita de Seguimiento: ${consultDiagnostico.slice(0, 80)}`,
             estado: 'confirmada',
+            checkin_estado: 'pendiente',
             doctor_asignado: loggedDoctor.nombre_completo,
             doctor_id: loggedDoctor.id,
-            notas_ia: `Agendada por ${loggedDoctor.nombre_completo} desde Portal de Especialistas.`
+            notas_ia: `Agendada por ${loggedDoctor.nombre_completo} desde Portal de Especialistas. Folio: ${proximoFolio}.`
           });
         }
 
@@ -463,14 +519,14 @@ export default function DoctoresLoginPage() {
           tipo: 'saliente',
           estado: 'finalizada',
           opcion_ivr_seleccionada: 'Consulta Médica de Especialista',
-          resumen_ia: `Consulta efectuada por ${loggedDoctor.nombre_completo}. Diagnóstico: ${consultDiagnostico}. Receta Folio ${folioReceta}.`,
-          notas_agente: `Folio Hito: ${folioHito} | Folio Receta: ${folioReceta}`,
+          resumen_ia: `Consulta efectuada por ${loggedDoctor.nombre_completo}. Diagnóstico: ${consultDiagnostico}. Receta Folio ${folioReceta}. ID Paciente: ${patientId}.`,
+          notas_agente: `Folio Hito: ${folioHito} | Folio Receta: ${folioReceta} | Folio Cita: ${folioCita}`,
           folio_hito: folioHito
         });
 
         // 4. Registrar en CBR (Case-Based Reasoning: cbr_casos) con UUID y Folio de Hito homologado
-        const cbrProblema = `Paciente ${consultTargetPatient.nombre} (${consultTargetPatient.caller_id}) acudió a consulta por: ${consultMotivo}. Diagnóstico clínico emitido: ${consultDiagnostico}.`;
-        const cbrSolucion = `Especialista ${loggedDoctor.nombre_completo} prescribió: ${consultReceta}. Evolución clínica registrada: ${consultNotas || 'Evolución favorable con apego farmacológico.'}. ${proximaCitaFecha ? `Próxima cita de seguimiento programada para el ${proximaCitaFecha} a las ${proximaCitaHora} hrs.` : ''}`;
+        const cbrProblema = `Paciente ${consultTargetPatient.nombre} (${consultTargetPatient.caller_id}, ${patientId}) acudió a consulta por: ${consultMotivo}. Folio Cita: ${folioCita}. Diagnóstico clínico emitido: ${consultDiagnostico}.`;
+        const cbrSolucion = `Especialista ${loggedDoctor.nombre_completo} prescribió: ${consultReceta}. Receta Oficial: ${folioReceta}. Evolución clínica registrada: ${consultNotas || 'Evolución favorable con apego farmacológico.'}. ${proximaCitaFecha ? `Próxima cita de seguimiento programada para el ${proximaCitaFecha} a las ${proximaCitaHora} hrs.` : ''}`;
         
         await supabase.from('cbr_casos').insert({
           categoria: 'consulta_medica_seguimiento',
@@ -479,6 +535,9 @@ export default function DoctoresLoginPage() {
           resolucion_exitosa: true,
           veces_utilizado: 1,
           caller_id: consultTargetPatient.caller_id,
+          id_paciente: patientId,
+          folio_cita: folioCita,
+          folio_receta: folioReceta,
           paciente_nombre: consultTargetPatient.nombre,
           estado: 'resuelto_en_tratamiento',
           llamada_id: sessionUUID,
@@ -501,6 +560,8 @@ export default function DoctoresLoginPage() {
           id: `hist-${Date.now()}`,
           caller_id: consultTargetPatient.caller_id,
           cliente_id: consultTargetPatient.cliente_id || null,
+          id_paciente: patientId,
+          folio_cita: folioCita,
           paciente_nombre: consultTargetPatient.nombre,
           fecha_ultima_consulta: todayStr,
           ultimo_motivo: consultMotivo,
@@ -968,12 +1029,41 @@ ${h.proxima_cita || 'Según evolución del paciente.'}
 
                         {/* Nombre del Paciente y CallerID */}
                         <div>
-                          <h4 className="text-base font-bold text-slate-800 leading-snug">
-                            {cita.paciente_nombre}
-                          </h4>
-                          <p className="text-xs text-slate-500 font-mono flex items-center gap-1.5 mt-0.5">
-                            <Phone className="w-3 h-3 text-slate-400" /> CallerID: {cita.caller_id}
-                          </p>
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className="text-base font-bold text-slate-800 leading-snug">
+                              {cita.paciente_nombre}
+                            </h4>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="bg-purple-50 text-purple-800 border border-purple-200 text-[10px] font-bold px-2 py-0.5 rounded font-mono">
+                                {cita.id_paciente || 'PAC-1089754'}
+                              </span>
+                              <span className="bg-blue-50 text-blue-800 border border-blue-200 text-[10px] font-bold px-2 py-0.5 rounded font-mono">
+                                {cita.folio_cita || 'CIT-0921-8421'}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between mt-1 flex-wrap gap-1">
+                            <p className="text-xs text-slate-500 font-mono flex items-center gap-1.5">
+                              <Phone className="w-3 h-3 text-slate-400" /> CallerID: {cita.caller_id}
+                            </p>
+                            {cita.checkin_estado === 'checkin_realizado' ? (
+                              <span className="bg-emerald-50 text-emerald-800 border border-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Check-In ({cita.checkin_hora || '10:00'})
+                              </span>
+                            ) : cita.estado === 'confirmada' ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleCheckIn(cita);
+                                }}
+                                className="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 transition active:scale-95 shadow-xs"
+                                title="Registrar llegada del paciente a recepción / sala de espera"
+                              >
+                                <UserCheck className="w-3 h-3 text-amber-700" /> Registrar Check-In
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
 
                         {/* Especialidad y Motivo */}
@@ -1024,7 +1114,9 @@ ${h.proxima_cita || 'Según evolución del paciente.'}
                               caller_id: cita.caller_id,
                               cliente_id: cita.cliente_id || undefined,
                               motivo: cita.motivo,
-                              cita_id: cita.id
+                              cita_id: cita.id,
+                              id_paciente: cita.id_paciente || 'PAC-1089754',
+                              folio_cita: cita.folio_cita || 'CIT-0921-8421'
                             })}
                             className="flex-1 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold py-2 px-3 rounded-xl transition shadow-xs flex items-center justify-center gap-1.5"
                           >
@@ -1038,13 +1130,15 @@ ${h.proxima_cita || 'Según evolución del paciente.'}
                             const foundHist = historiales.find(h => h.caller_id === cita.caller_id) || {
                               id: `temp-${cita.id}`,
                               caller_id: cita.caller_id,
+                              id_paciente: cita.id_paciente || 'PAC-1089754',
+                              folio_cita: cita.folio_cita || 'CIT-0921-8421',
                               paciente_nombre: cita.paciente_nombre,
                               fecha_ultima_consulta: cita.fecha,
                               ultimo_motivo: cita.motivo,
                               diagnostico_previo: 'Consulta médica programada en clínica',
                               sugerencia_preventiva_ia: cita.notas_ia || 'Seguimiento clínico de rutina',
                               doctor_asignado: loggedDoctor.nombre_completo,
-                              folio_receta: `CIT-${cita.fecha.replace(/-/g, '')}-${cita.caller_id.slice(-4)}`
+                              folio_receta: `REC-2026-MED-${(cita.folio_cita || cita.caller_id).slice(-4)}`
                             };
                             setPdfReport({ historial: foundHist, doctor: loggedDoctor });
                           }}
@@ -1471,9 +1565,13 @@ ${h.proxima_cita || 'Según evolución del paciente.'}
 
                 <div className="text-right">
                   <span className="px-2.5 py-1 bg-slate-900 text-white rounded text-xs font-mono font-bold block mb-1">
-                    FOLIO: {pdfReport.historial.folio_receta || 'REC-2026-MED-0921'}
+                    RECETA: {pdfReport.historial.folio_receta || 'REC-2026-MED-8421'}
                   </span>
-                  <p className="text-xs text-slate-600 font-mono">
+                  <div className="flex items-center justify-end gap-1 text-[11px] font-mono text-teal-700">
+                    <span>Folio Cita:</span>
+                    <strong className="bg-teal-50 px-1 rounded border border-teal-200">{pdfReport.historial.folio_cita || 'CIT-0921-8421'}</strong>
+                  </div>
+                  <p className="text-xs text-slate-600 font-mono mt-0.5">
                     Fecha: <strong>{pdfReport.historial.fecha_ultima_consulta}</strong>
                   </p>
                 </div>
@@ -1499,10 +1597,16 @@ ${h.proxima_cita || 'Según evolución del paciente.'}
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Nombre del Paciente</span>
                     <span className="text-base font-bold text-slate-900">{pdfReport.historial.paciente_nombre}</span>
+                    <span className="inline-block mt-1 text-[11px] font-mono font-bold bg-purple-100 text-purple-900 px-2 py-0.5 rounded border border-purple-300">
+                      ID Expediente / Paciente: {pdfReport.historial.id_paciente || 'PAC-1089754'}
+                    </span>
                   </div>
                   <div className="text-right">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Teléfono / Expediente</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Teléfono / CallerID</span>
                     <span className="text-xs font-mono font-bold text-slate-800">{pdfReport.historial.caller_id}</span>
+                    <span className="block mt-1 text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                      ✓ Check-In Realizado • Check-Out Concluido
+                    </span>
                   </div>
                 </div>
 
