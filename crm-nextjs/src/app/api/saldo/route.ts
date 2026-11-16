@@ -17,19 +17,22 @@ export async function GET(request: Request) {
     let query = supabase.from('clientes').select('*');
 
     if (caller_id) {
-      query = query.eq('caller_id', caller_id);
+      const cleanCaller = caller_id.startsWith('77') ? caller_id.substring(2) : caller_id;
+      query = query.or(`caller_id.eq.${caller_id},caller_id.eq.${cleanCaller}`);
     } else if (tarjeta) {
       query = query.ilike('numero_tarjeta_mask', `%${tarjeta}%`);
     }
 
-    const { data, error } = await query.single();
+    const { data: results, error } = await query.limit(1);
 
-    if (error || !data) {
+    if (error || !results || results.length === 0) {
       return NextResponse.json(
         { found: false, message: 'Cliente no encontrado' },
         { status: 404 }
       );
     }
+
+    const data = results[0];
 
     // VALIDACIÓN ESTÁNDAR: Si la tarjeta está cancelada (estatus 2), NO entregar saldo
     if (data.estatus_tarjeta === 2) {
@@ -39,7 +42,7 @@ export async function GET(request: Request) {
         tipo: 'entrante',
         estado: 'en_curso',
         opcion_ivr_seleccionada: '1. Consulta de Saldo DENEGADA',
-        resumen_ia: `Intento de consulta de saldo rechazado: Tarjeta ${data.numero_tarjeta_mask} se encuentra cancelada (Estatus 2).`
+        resumen_ia: `Intento de consulta de saldo rechazado: Tarjeta ${data.numero_tarjeta_mask} se encuentra cancelada (Estatus 2). Folio: ${data.folio_cancelacion || 'N/A'}`
       });
 
       return NextResponse.json({
@@ -50,6 +53,7 @@ export async function GET(request: Request) {
         estatus_tarjeta: 2,
         tarjeta_activa: false,
         saldo_bloqueado: true,
+        folio_cancelacion: data.folio_cancelacion,
         mensaje: 'Tarjeta cancelada / bloqueada. Consulta de saldo no permitida en IVR.',
         saldo: null,
         saldo_formateado: 'NO DISPONIBLE (CANCELADA)'
@@ -97,19 +101,22 @@ export async function POST(request: Request) {
 
     let query = supabase.from('clientes').select('*');
     if (caller_id) {
-      query = query.eq('caller_id', caller_id);
+      const cleanCaller = caller_id.startsWith('77') ? caller_id.substring(2) : caller_id;
+      query = query.or(`caller_id.eq.${caller_id},caller_id.eq.${cleanCaller}`);
     } else if (tarjeta) {
       query = query.ilike('numero_tarjeta_mask', `%${tarjeta}%`);
     }
 
-    const { data, error } = await query.single();
+    const { data: results, error } = await query.limit(1);
 
-    if (error || !data) {
+    if (error || !results || results.length === 0) {
       return NextResponse.json(
-        { found: false, message: 'Cliente no registrado' },
+        { found: false, message: 'Cuenta no encontrada' },
         { status: 404 }
       );
     }
+
+    const data = results[0];
 
     if (data.estatus_tarjeta === 2) {
       return NextResponse.json({
@@ -120,7 +127,8 @@ export async function POST(request: Request) {
         estatus_tarjeta: 2,
         tarjeta_activa: false,
         saldo_bloqueado: true,
-        mensaje: 'Tarjeta cancelada / bloqueada. Consulta de saldo no permitida.',
+        folio_cancelacion: data.folio_cancelacion,
+        mensaje: 'Tarjeta cancelada / bloqueada. Saldo bloqueado en IVR.',
         saldo: null,
         saldo_formateado: 'NO DISPONIBLE (CANCELADA)'
       });
@@ -133,7 +141,7 @@ export async function POST(request: Request) {
       empresa: data.empresa,
       numero_tarjeta_mask: data.numero_tarjeta_mask,
       estatus_tarjeta: data.estatus_tarjeta ?? 1,
-      tarjeta_activa: (data.estatus_tarjeta ?? 1) === 1,
+      tarjeta_activa: true,
       saldo: Number(data.saldo),
       saldo_formateado: `$${Number(data.saldo).toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN`
     });

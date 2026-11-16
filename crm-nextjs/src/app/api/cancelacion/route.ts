@@ -13,7 +13,8 @@ export async function GET(request: Request) {
     if (folio) {
       query = query.ilike('folio_cancelacion', `%${folio.trim()}%`);
     } else if (caller_id) {
-      query = query.eq('caller_id', caller_id);
+      const cleanCaller = caller_id.startsWith('77') ? caller_id.substring(2) : caller_id;
+      query = query.or(`caller_id.eq.${caller_id},caller_id.eq.${cleanCaller}`);
     } else if (cliente_id) {
       query = query.eq('cliente_id', cliente_id);
     }
@@ -49,25 +50,27 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Buscar cliente
+    // 1. Buscar cliente (con soporte de normalización de prefijo 77)
     let query = supabase.from('clientes').select('*');
     if (cliente_id) {
       query = query.eq('id', cliente_id);
     } else if (caller_id) {
-      query = query.eq('caller_id', caller_id);
+      const cleanCaller = caller_id.startsWith('77') ? caller_id.substring(2) : caller_id;
+      query = query.or(`caller_id.eq.${caller_id},caller_id.eq.${cleanCaller}`);
     } else if (tarjeta) {
       query = query.ilike('numero_tarjeta_mask', `%${tarjeta}%`);
     }
 
-    const { data: cliente, error } = await query.single();
+    const { data: clientesFound, error } = await query.limit(1);
 
-    if (error || !cliente) {
+    if (error || !clientesFound || clientesFound.length === 0) {
       return NextResponse.json(
         { found: false, message: 'No se encontró la cuenta asociada' },
         { status: 404 }
       );
     }
 
+    const cliente = clientesFound[0];
     const estatusAnterior = cliente.estatus_tarjeta ?? 1;
     // Si no se especifica nuevo_estatus, por defecto es 2 (cancelación)
     const estatusDestino = nuevo_estatus !== undefined ? Number(nuevo_estatus) : 2;
@@ -100,7 +103,7 @@ export async function POST(request: Request) {
 
     const motivoFinal = motivo || (esCancelacion 
       ? 'Cancelación/Bloqueo registrado desde CRM o IVR' 
-      : 'Reactivación de tarjeta autorizada por ejecutivo');
+      : 'Aclaración de incidencia y reactivación autorizada por agente');
 
     // 2. Actualizar campo estatus_tarjeta y datos de cancelación en tabla clientes
     const updateClientePayload: any = {
@@ -113,6 +116,8 @@ export async function POST(request: Request) {
       updateClientePayload.fecha_cancelacion = new Date().toISOString();
       updateClientePayload.motivo_cancelacion = motivoFinal;
     } else {
+      updateClientePayload.folio_cancelacion = null;
+      updateClientePayload.fecha_cancelacion = null;
       updateClientePayload.motivo_cancelacion = motivoFinal;
     }
 
@@ -147,21 +152,21 @@ export async function POST(request: Request) {
       cliente_id: cliente.id,
       tipo: 'entrante',
       estado: esCancelacion ? 'transferida' : 'finalizada',
-      opcion_ivr_seleccionada: esCancelacion ? '2. Cancelación' : 'Reactivación de Tarjeta',
-      folio_cancelacion: folioOperacion,
+      opcion_ivr_seleccionada: esCancelacion ? '2. Cancelación' : 'Reactivación de Tarjeta (Desbloqueo)',
+      folio_cancelacion: esCancelacion ? folioOperacion : null,
       resumen_ia: esCancelacion 
         ? `Cancelación de tarjeta ejecutada: Folio Oficial ${folioOperacion}. Tarjeta ${cliente.numero_tarjeta_mask}. Saldo restante $${cliente.saldo}. Motivo: ${motivoFinal}. Consulta de saldo en IVR queda bloqueada.`
-        : `Reactivación de tarjeta ejecutada: Folio ${folioOperacion}. Tarjeta ${cliente.numero_tarjeta_mask}. Estatus restablecido a 1 (Activa). Saldo vuelve a estar disponible en IVR.`,
-      notas_agente: `Operación ${folioOperacion} procesada por ${canal}. Nuevo estatus: ${estatusDestino}`
+        : `Reactivación de tarjeta ejecutada: Incidencia aclarada (${motivoFinal}). Tarjeta ${cliente.numero_tarjeta_mask}. Estatus restablecido a 1 (Activa). Saldo vuelve a estar disponible en IVR Asterisk.`,
+      notas_agente: `Operación ${folioOperacion} procesada por ${canal}. Nuevo estatus: ${estatusDestino}. Motivo: ${motivoFinal}`
     });
 
     return NextResponse.json({
       success: true,
       mensaje: esCancelacion 
         ? 'Tarjeta cancelada/bloqueada con éxito. Consulta de saldo bloqueada en IVR.'
-        : 'Tarjeta reactivada con éxito. Consulta de saldo habilitada en IVR.',
+        : 'Tarjeta desbloqueada y reactivada con éxito. Consulta de saldo habilitada en IVR.',
       folio_operacion: folioOperacion,
-      folio_cancelacion: folioOperacion,
+      folio_cancelacion: esCancelacion ? folioOperacion : null,
       estatus_anterior: estatusAnterior,
       estatus_tarjeta: estatusDestino,
       tarjeta_activa: estatusDestino === 1,
@@ -172,8 +177,8 @@ export async function POST(request: Request) {
         numero_tarjeta_mask: cliente.numero_tarjeta_mask,
         saldo_pendiente: Number(cliente.saldo),
         estatus_tarjeta: estatusDestino,
-        folio_cancelacion: esCancelacion ? folioOperacion : cliente.folio_cancelacion,
-        fecha_cancelacion: esCancelacion ? updateClientePayload.fecha_cancelacion : cliente.fecha_cancelacion
+        folio_cancelacion: esCancelacion ? folioOperacion : null,
+        fecha_cancelacion: esCancelacion ? updateClientePayload.fecha_cancelacion : null
       }
     });
   } catch (err: any) {
