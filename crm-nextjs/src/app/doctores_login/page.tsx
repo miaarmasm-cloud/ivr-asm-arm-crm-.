@@ -602,7 +602,7 @@ ${h.proxima_cita || 'Según evolución del paciente.'}
                     {doc.especialidad}
                   </span>
                   <span className="text-[9px] text-teal-400 font-mono mt-0.5 block">
-                    {doc.consultorio.split('-')[0]}
+                    {doc.consultorio ? doc.consultorio.split('-')[0] : 'Consultorio'}
                   </span>
                 </button>
               ))}
@@ -651,7 +651,7 @@ ${h.proxima_cita || 'Según evolución del paciente.'}
               <p className="text-xs text-slate-400 flex items-center gap-1.5">
                 <span>{loggedDoctor.especialidad}</span>
                 <span>•</span>
-                <span className="text-teal-400 font-semibold">{loggedDoctor.consultorio}</span>
+                <span className="text-teal-400 font-semibold">{loggedDoctor.consultorio || 'Consultorio Principal'}</span>
               </p>
             </div>
           </div>
@@ -1370,7 +1370,7 @@ ${h.proxima_cita || 'Según evolución del paciente.'}
                 <div className="text-right">
                   <span className="text-[10px] text-slate-400 font-bold uppercase block">Cédula Profesional SSA</span>
                   <span className="text-xs font-mono font-bold text-teal-800">{pdfReport.doctor.cedula_profesional}</span>
-                  <p className="text-slate-600">{pdfReport.doctor.consultorio}</p>
+                  <p className="text-slate-600">{pdfReport.doctor.consultorio || 'Consultorio Principal'}</p>
                 </div>
               </div>
 
