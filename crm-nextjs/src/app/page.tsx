@@ -188,7 +188,7 @@ const INITIAL_ORDERS: OrderDelivery[] = [
 type DirectoryTab = 'todos' | 'canceladas' | 'leads' | 'activos' | 'recientes';
 
 // Helper para determinar si un cliente clasifica como Lead (nuevo/prospecto)
-export function isCustomerLead(c: Customer): boolean {
+function isCustomerLead(c: Customer): boolean {
   const sal = Number(c.saldo) || 0;
   const nom = (c.nombre_completo || '').toLowerCase();
   const tarj = (c.numero_tarjeta_mask || '').toLowerCase();
