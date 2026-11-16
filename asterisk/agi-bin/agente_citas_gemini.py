@@ -345,14 +345,27 @@ def verificar_disponibilidad_doctor(doctor_nombre, fecha, hora):
 # INTEGRACIÓN CON GEMINI / RAZONAMIENTO CBR
 # =============================================================================
 
-def generar_analisis_clinico_gemini(paciente, motivo_previo, recomendacion, doctor):
+def generar_hito_clinico_gemini(paciente, fecha_consulta, doctor, diagnostico, recomendacion, receta=None):
+    """Genera locución neuronal con el hito de la última consulta, nuevo diagnóstico y tratamiento médico."""
+    fecha_txt = formatear_fecha_es(fecha_consulta) if fecha_consulta else "recientemente"
+    diag_clean = (diagnostico or "Revisión clínica general").replace("\n", " ").strip()
+    if len(diag_clean) > 130:
+        diag_clean = diag_clean[:130].rsplit('.', 1)[0] + "."
+
+    rec_clean = (receta or recomendacion or "control de signos vitales e hidratación").replace("\n", " ").strip()
+    if len(rec_clean) > 130:
+        rec_clean = rec_clean[:130].rsplit('.', 1)[0] + "."
+
     if GEMINI_API_KEY:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
             prompt = (
-                f"Eres un agente médico telefónico inteligente del IVR. El paciente {paciente} acudió previamente por {motivo_previo}. "
-                f"La recomendación preventiva es {recomendacion} con {doctor}. "
-                f"Genera en máximo 2 oraciones concisas y amables en español de México el saludo y la sugerencia preventiva para leer en voz alta."
+                f"Eres el agente médico telefónico del conmutador de la clínica ARM. "
+                f"El paciente {paciente} acudió a su consulta el {fecha_txt} con la {doctor}. "
+                f"Su nuevo diagnóstico emitido por la doctora es: {diag_clean} "
+                f"Y el tratamiento y recomendación prescrita es: {rec_clean} "
+                f"Genera exactamente 2 oraciones breves y amables en español de México para leer en voz alta por teléfono, "
+                f"haciendo referencia explícita al hito de su última visita y la actualización de su diagnóstico y tratamiento."
             )
             body = {"contents": [{"parts": [{"text": prompt}]}]}
             req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
@@ -364,8 +377,9 @@ def generar_analisis_clinico_gemini(paciente, motivo_previo, recomendacion, doct
             sys.stderr.write(f"Gemini API Fallback: {e}\n")
 
     return (
-        f"En su expediente tengo registrado que en su última consulta acudió por {motivo_previo}. "
-        f"Nuestra recomendación médica preventiva es {recomendacion}."
+        f"En su expediente médico tenemos registrado el hito de su última consulta del {fecha_txt} atendida por su doctora de cabecera, la {doctor}. "
+        f"Su nuevo diagnóstico actualizado es: {diag_clean} "
+        f"Y su recomendación y receta médica es: {rec_clean}."
     )
 
 
@@ -398,22 +412,43 @@ def main():
 
     historial = None
     for cid in cid_candidates:
-        historiales = http_get(f"historial_clinico_pacientes?caller_id=eq.{cid}&select=*&order=fecha_ultima_consulta.desc&limit=1")
+        historiales = http_get(f"historial_clinico_pacientes?caller_id=eq.{cid}&select=*&order=created_at.desc&limit=1")
         if historiales:
             historial = historiales[0]
             break
 
-    # 2. Identificar médico de cabecera y sugerencia preventiva
+    # 2. Identificar médico de cabecera, hito clínico reciente, diagnóstico y prescripción
     doctor_cabecera = historial.get("doctor_asignado", "Dra. Mariana Fernández") if historial else "Dra. Mariana Fernández"
     ultimo_motivo = historial.get("ultimo_motivo", "Revisión de presión arterial y chequeo general") if historial else "Consulta general"
-    sugerencia_preventiva = historial.get(
-        "sugerencia_preventiva_ia",
-        "Check-up general de sangre y perfil lipídico completo"
-    ) if historial else "Chequeo preventivo semestral"
+    diagnostico_actual = historial.get("diagnostico_previo", "") if historial else ""
+    sugerencia_preventiva = historial.get("sugerencia_preventiva_ia", "Control de signos vitales") if historial else "Chequeo preventivo semestral"
+    receta_farmaco = historial.get("receta_medicamentos", "") if historial else ""
+    fecha_ult_consulta = historial.get("fecha_ultima_consulta", "") if historial else ""
 
-    # 3. Verificar si el paciente ya tiene una cita activa confirmada
-    citas_activas = http_get(f"citas_calendario?caller_id=eq.{caller_id}&estado=in.(confirmada,reprogramada)&select=*&order=fecha.desc&limit=1")
-    cita_activa = citas_activas[0] if citas_activas else None
+    # Generar locución con el hito de la última consulta, diagnóstico y tratamiento emitido por la doctora
+    resumen_hito_clinico = ""
+    if historial:
+        resumen_hito_clinico = generar_hito_clinico_gemini(
+            nombre or primer_nombre,
+            fecha_ult_consulta,
+            doctor_cabecera,
+            diagnostico_actual,
+            sugerencia_preventiva,
+            receta_farmaco
+        )
+
+    # 3. Verificar si el paciente tiene una cita futura confirmada/pendiente (NO atendida)
+    today_str = datetime.date.today().isoformat()
+    cita_activa = None
+    for cid in cid_candidates:
+        citas_list = http_get(f"citas_calendario?caller_id=eq.{cid}&estado=in.(confirmada,reprogramada)&select=*&order=fecha.asc")
+        if citas_list:
+            for c in citas_list:
+                if str(c.get('fecha')) >= today_str:
+                    cita_activa = c
+                    break
+            if cita_activa:
+                break
 
     # 4. Horarios objetivo
     fecha_objetivo = calcular_siguiente_dia_laboral()
@@ -446,30 +481,30 @@ def main():
     elif cita_activa:
         fecha_activa_txt = formatear_fecha_es(cita_activa.get('fecha'))
         texto_audio = (
-            f"Hola {primer_nombre}, bienvenido nuevamente a su sistema médico ARM. "
-            f"Actualmente usted cuenta con una cita confirmada para el día {fecha_activa_txt} "
-            f"a las {str(cita_activa.get('hora'))[:5]} horas con {cita_activa.get('doctor_asignado')}. "
+            f"Hola {nombre or primer_nombre}, bienvenido a su línea de atención médica ARM. "
+            f"{resumen_hito_clinico} "
+            f"Asimismo, le recordamos que cuenta con su próxima cita de seguimiento programada para el día {fecha_activa_txt} "
+            f"a las {str(cita_activa.get('hora'))[:5]} horas con la {cita_activa.get('doctor_asignado', doctor_cabecera)}. "
             f"Presione 1 para confirmar su asistencia. "
-            f"Presione 2 para reprogramarla a otro horario disponible. "
+            f"Presione 2 para reprogramarla a otra fecha u horario disponible. "
             f"Presione 3 para cancelarla. "
-            f"O presione 0 para comunicarse directamente con un asesor médico."
+            f"O presione 0 para comunicarse directamente con su consultorio o un asesor médico."
         )
         escape_chars = "1230"
     elif doctor_ocupado:
-        resumen_clinico = generar_analisis_clinico_gemini(primer_nombre, ultimo_motivo, sugerencia_preventiva, doctor_cabecera)
         texto_audio = (
-            f"Hola {primer_nombre}, bienvenido a la opción de citas médicas del sistema ARM. {resumen_clinico} "
-            f"Le informamos que su doctora de cabecera, la {doctor_cabecera}, se encuentra ocupada el {fecha_obj_txt} a las {hora_preferente} horas. "
-            f"Sin embargo, tenemos las siguientes opciones para usted: "
+            f"Hola {nombre or primer_nombre}, bienvenido a su línea de atención médica ARM. "
+            f"{resumen_hito_clinico} "
+            f"Le informamos que su doctora de cabecera, la {doctor_cabecera}, se encuentra en consulta para el {fecha_obj_txt} a las {hora_preferente} horas. "
             f"Presione 1 si desea ser atendido ese mismo día con el {medico_turno} a las {hora_turno} horas. "
             f"O presione 2 para agendar con su doctora de cabecera {doctor_cabecera} para el día siguiente, {fecha_sig_txt}, a las {hora_preferente} horas. "
             f"O presione 0 para transferir con un asesor médico."
         )
         escape_chars = "120"
     else:
-        resumen_clinico = generar_analisis_clinico_gemini(primer_nombre, ultimo_motivo, sugerencia_preventiva, doctor_cabecera)
         texto_audio = (
-            f"Hola {primer_nombre}, bienvenido a la opción de citas médicas del sistema ARM. {resumen_clinico} "
+            f"Hola {nombre or primer_nombre}, bienvenido a su línea de atención médica ARM. "
+            f"{resumen_hito_clinico} "
             f"Su doctora de cabecera, la {doctor_cabecera}, se encuentra disponible en nuestro calendario para el día {fecha_obj_txt} a las {hora_preferente} horas. "
             f"Presione 1 para confirmar y agendar su cita con la {doctor_cabecera}. "
             f"Presione 2 para consultar otros médicos u horarios de la clínica. "
@@ -499,6 +534,24 @@ def main():
     # =========================================================================
 
     if tecla == "1":
+        if cita_activa:
+            mensaje_exito = (
+                f"Muchas gracias {primer_nombre}. Su asistencia a su cita de seguimiento del "
+                f"{formatear_fecha_es(cita_activa.get('fecha'))} a las {str(cita_activa.get('hora'))[:5]} horas "
+                f"con la {cita_activa.get('doctor_asignado', doctor_cabecera)} ha quedado ratificada en nuestro sistema. "
+                f"Le recordamos continuar con las indicaciones de su tratamiento médico."
+            )
+            hablar(mensaje_exito)
+            http_post("llamadas_bitacora", {
+                "caller_id": caller_id,
+                "tipo": "entrante",
+                "estado": "finalizada",
+                "opcion_ivr_seleccionada": "Confirmación de Cita de Seguimiento",
+                "resumen_ia": f"Paciente {nombre} ratificó asistencia a cita del {cita_activa.get('fecha')} con {cita_activa.get('doctor_asignado', doctor_cabecera)}.",
+                "notas_agente": f"Folio cita: {cita_activa.get('id')}"
+            })
+            return
+
         if doctor_ocupado and not cita_activa:
             fecha_final = fecha_objetivo
             hora_final = hora_turno
