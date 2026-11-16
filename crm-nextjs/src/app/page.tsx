@@ -1095,33 +1095,38 @@ export default function CRMPage() {
                   setCallLogs(prev => [newLog, ...prev]);
                   setRecentIncomingCallers(prev => [num, ...prev.filter(id => id !== num)]);
                 }}
+                onCallEnded={(dur) => {
+                  if (activeCustomer) {
+                    handleAddNote(`Llamada finalizada. Canal Asterisk liberado. Duración: ${dur} segundos.`);
+                  }
+                }}
               />
             </div>
           </div>
         )}
       </main>
 
-      {/* Modal de Screen-Pop para Atención de Llamadas */}
+      {/* Modal de Screen-Pop (Llamada entrante o saliente con incidencia del momento) */}
       {screenPopData && (
         <ScreenPopModal
-          callerId={screenPopData.callerId}
+          incomingCallerId={screenPopData.callerId}
+          customer={customers.find(c => c.caller_id === screenPopData.callerId) || activeCustomer}
           callType={screenPopData.callType}
-          initialFolio={screenPopData.folio}
-          initialReporte={screenPopData.reporte}
-          onAccept={() => handleAcceptScreenPop(screenPopData.callerId)}
-          onClose={() => setScreenPopData(null)}
-          onSaveNotes={(notes) => handleSaveIncidentNotes(screenPopData.callerId, notes)}
+          incidentFolio={screenPopData.folio}
+          incidentReport={screenPopData.reporte}
+          onAccept={handleAcceptScreenPop}
+          onDismiss={() => setScreenPopData(null)}
+          onSaveIncidentNotes={handleSaveIncidentNotes}
         />
       )}
 
-      {/* Modal de Configuración VM / Localhost */}
-      {isVMModalOpen && (
-        <VMConnectionModal
-          isOpen={isVMModalOpen}
-          onClose={() => setIsVMModalOpen(false)}
-          onConfigSaved={(newCfg) => setVmConfig(newCfg)}
-        />
-      )}
+      {/* Modal de Conexión de Máquina Virtual / Localhost */}
+      <VMConnectionModal
+        isOpen={isVMModalOpen}
+        onClose={() => setIsVMModalOpen(false)}
+        config={vmConfig}
+        onUpdateConfig={(newCfg) => setVmConfig(newCfg)}
+      />
     </div>
   );
 }
