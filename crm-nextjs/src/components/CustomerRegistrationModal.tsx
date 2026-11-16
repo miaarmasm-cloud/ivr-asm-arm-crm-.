@@ -202,7 +202,17 @@ export default function CustomerRegistrationModal({
         } else {
           const fakeCustomer: Customer = {
             id: `c-${Date.now()}`,
-            ...(payload as Customer),
+            caller_id: payload.caller_id || cleanCaller,
+            nombre_completo: payload.nombre_completo || '',
+            empresa: payload.empresa || '',
+            direccion: payload.direccion || '',
+            email: payload.email || '',
+            numero_tarjeta_mask: payload.numero_tarjeta_mask || '',
+            saldo: payload.saldo ?? 0,
+            estatus_tarjeta: payload.estatus_tarjeta ?? 1,
+            fecha_nacimiento: payload.fecha_nacimiento,
+            agente_asignado: payload.agente_asignado,
+            telefonos_adicionales: payload.telefonos_adicionales,
             compras_previas: []
           };
           onCustomerSaved(fakeCustomer, true);
@@ -248,8 +258,18 @@ export default function CustomerRegistrationModal({
           onCustomerSaved(data as Customer, false);
         } else {
           const updated: Customer = {
-            ...initialCustomer,
-            ...(payload as Customer)
+            ...(initialCustomer as Customer),
+            caller_id: payload.caller_id || initialCustomer?.caller_id || '',
+            nombre_completo: payload.nombre_completo || initialCustomer?.nombre_completo || '',
+            empresa: payload.empresa || initialCustomer?.empresa || '',
+            direccion: payload.direccion || initialCustomer?.direccion || '',
+            email: payload.email || initialCustomer?.email || '',
+            numero_tarjeta_mask: payload.numero_tarjeta_mask || initialCustomer?.numero_tarjeta_mask || '',
+            saldo: payload.saldo ?? initialCustomer?.saldo ?? 0,
+            estatus_tarjeta: payload.estatus_tarjeta ?? initialCustomer?.estatus_tarjeta ?? 1,
+            fecha_nacimiento: payload.fecha_nacimiento || initialCustomer?.fecha_nacimiento,
+            agente_asignado: payload.agente_asignado || initialCustomer?.agente_asignado,
+            telefonos_adicionales: payload.telefonos_adicionales || initialCustomer?.telefonos_adicionales || []
           };
           onCustomerSaved(updated, false);
         }
