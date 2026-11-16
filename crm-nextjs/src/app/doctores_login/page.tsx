@@ -427,9 +427,6 @@ export default function DoctoresLoginPage() {
             notas_ia: `Agendada por ${loggedDoctor.nombre_completo} desde Portal de Especialistas.`
           });
         }
-            notas_ia: `Agendada por ${loggedDoctor.nombre_completo} desde Portal de Especialistas.`
-          });
-        }
 
         // 3. Registrar en llamadas_bitacora
         await supabase.from('llamadas_bitacora').insert({
