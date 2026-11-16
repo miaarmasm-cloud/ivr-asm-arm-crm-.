@@ -11,6 +11,7 @@ import TelephonyMonitor from '@/components/TelephonyMonitor';
 import VMConnectionModal from '@/components/VMConnectionModal';
 import MedicalConsultations from '@/components/MedicalConsultations';
 import CampaignsManager from '@/components/CampaignsManager';
+import CustomerRegistrationModal from '@/components/CustomerRegistrationModal';
 import { Customer, CallLog, OrderDelivery } from '@/lib/types';
 import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
 import { getVMConfig, VMConnectionConfig } from '@/lib/config';
@@ -42,7 +43,8 @@ import {
   Clock,
   Tag,
   AlertTriangle,
-  UserPlus
+  UserPlus,
+  Edit3
 } from 'lucide-react';
 
 // Datos semilla de inicio para pruebas inmediatas
@@ -89,22 +91,37 @@ const INITIAL_CUSTOMERS: Customer[] = [
     id: 'c3',
     caller_id: '7711100921',
     nombre_completo: 'Lic. Gabriel Morales Ramos',
-    empresa: 'Soluciones Morales & Asoc.',
-    direccion: 'Insurgentes Sur 1602, Crédito Constructor, Benito Juárez, CDMX',
+    empresa: 'Corporativo Médico Integral S.A.',
+    direccion: 'Av. Insurgentes Sur 1890, Col. Florida, Álvaro Obregón, CDMX',
     numero_tarjeta_mask: '**** **** **** 7744',
     saldo: 38500.00,
     estatus_tarjeta: 2,
     folio_cancelacion: '2026-11-16-7744-0921',
-    motivo_cancelacion: 'Cancelación preventiva de tarjeta por reporte de extravío',
-    fecha_cancelacion: '2026-11-16T00:30:00.000Z',
-    email: 'gabriel.morales@morales-asoc.mx',
-    telefonos_adicionales: ['11100921', '+525544332211'],
-    fecha_nacimiento: '1980-04-12',
-    agente_asignado: 'Agente Demo 1',
+    motivo_cancelacion: 'Cancelación y bloqueo solicitado por el cliente vía IVR (Opción 2)',
+    fecha_cancelacion: '2026-11-16T01:14:59.116Z',
+    email: 'gabriel.morales@corpmedico.com',
+    telefonos_adicionales: ['11100921', '+527711100921'],
+    fecha_nacimiento: '1982-04-25',
+    agente_asignado: 'Ext. 1001',
     compras_previas: [
-      { item: 'Póliza Médica Familiar Premium', fecha: '2026-01-15', total: 18500.00 },
-      { item: 'Consulta Especialista Cardiología', fecha: '2026-02-10', total: 2000.00 }
+      { item: 'Plan Médico Corporativo Platinum', fecha: '2026-03-10', total: 24500 },
+      { item: 'Póliza de Asistencia Médica Familiar', fecha: '2026-07-22', total: 14000 }
     ]
+  },
+  {
+    id: 'c4',
+    caller_id: '7799881122',
+    nombre_completo: 'Ing. Carlos Villalobos Mora (Nuevo Prospecto)',
+    empresa: 'Grupo Constructor del Valle',
+    direccion: 'Av. Universidad 1200, Col. del Valle, CDMX',
+    numero_tarjeta_mask: 'Pendiente de Asignación',
+    saldo: 0.00,
+    estatus_tarjeta: 1,
+    email: 'carlos.villalobos@constructoradelvalle.mx',
+    telefonos_adicionales: ['5599881122'],
+    fecha_nacimiento: '1988-09-14',
+    agente_asignado: 'Ext. 2001',
+    compras_previas: []
   }
 ];
 
@@ -128,6 +145,16 @@ const INITIAL_LOGS: CallLog[] = [
     resumen_ia: 'Llamada simulada PSTN 7711100921. Cliente Lic. Gabriel Morales Ramos con tarjeta cancelada (Folio 2026-11-16-7744-0921).',
     notas_agente: 'En espera de aclaración para reactivación a Estatus 1.',
     fecha_hora: new Date(Date.now() - 7200000).toISOString()
+  },
+  {
+    id: 'log-3',
+    caller_id: '7799881122',
+    tipo: 'entrante',
+    duracion_segundos: 45,
+    opcion_ivr_seleccionada: 'Inicio IVR - Cliente Nuevo (Opción 3/4)',
+    resumen_ia: 'Cliente nuevo detectado en IVR. Solicitó información para alta de tarjeta y apertura de expediente.',
+    notas_agente: 'Prospecto canalizado para captura de tarjeta y saldo inicial.',
+    fecha_hora: new Date(Date.now() - 1800000).toISOString()
   }
 ];
 
@@ -158,7 +185,25 @@ const INITIAL_ORDERS: OrderDelivery[] = [
   }
 ];
 
-type DirectoryTab = 'todos' | 'recientes' | 'leads' | 'activos' | 'canceladas';
+type DirectoryTab = 'todos' | 'canceladas' | 'leads' | 'activos' | 'recientes';
+
+// Helper para determinar si un cliente clasifica como Lead (nuevo/prospecto)
+export function isCustomerLead(c: Customer): boolean {
+  const sal = Number(c.saldo) || 0;
+  const nom = (c.nombre_completo || '').toLowerCase();
+  const tarj = (c.numero_tarjeta_mask || '').toLowerCase();
+  const emp = (c.empresa || '').toLowerCase();
+  return (
+    (sal === 0 || 
+     nom.includes('lead') || 
+     nom.includes('prospecto') || 
+     nom.includes('cliente nuevo') || 
+     tarj.includes('pendiente') || 
+     emp.includes('prospecto') ||
+     emp.includes('por registrar')
+    ) && c.estatus_tarjeta !== 2
+  );
+}
 
 export default function CRMPage() {
   const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
@@ -175,7 +220,7 @@ export default function CRMPage() {
   const [directoryTab, setDirectoryTab] = useState<DirectoryTab>('todos');
 
   // Cola de CallerIDs entrantes o atendidos recientemente para ordenamiento
-  const [recentIncomingCallers, setRecentIncomingCallers] = useState<string[]>(['7711100921', '1001']);
+  const [recentIncomingCallers, setRecentIncomingCallers] = useState<string[]>(['7799881122', '7711100921', '1001']);
   
   // Estado para Screen-Pop (Llamada entrante o saliente con reporte / incidencia del momento)
   const [screenPopData, setScreenPopData] = useState<{
@@ -196,10 +241,10 @@ export default function CRMPage() {
   const [isVMModalOpen, setIsVMModalOpen] = useState(false);
   const [vmConfig, setVmConfig] = useState<VMConnectionConfig>(getVMConfig());
 
-  // Formulario rápido para nuevo cliente / lead
-  const [showNewCustomerForm, setShowNewCustomerForm] = useState(false);
-  const [newCustName, setNewCustName] = useState('');
-  const [newCustPhone, setNewCustPhone] = useState('');
+  // Modal de Alta y Edición Completa de Clientes (INSERT y UPDATE)
+  const [isRegModalOpen, setIsRegModalOpen] = useState(false);
+  const [regModalMode, setRegModalMode] = useState<'create' | 'edit'>('create');
+  const [regTargetCustomer, setRegTargetCustomer] = useState<Customer | null>(null);
 
   const activeCustomer = customers.find(c => c.id === selectedCustomerId) || 
     (dbSearchResults ? dbSearchResults.find(c => c.id === selectedCustomerId) : null) || null;
@@ -230,7 +275,6 @@ export default function CRMPage() {
           
           if (dbLogs && dbLogs.length > 0) {
             setCallLogs(dbLogs);
-            // Extraer callers recientes de la bitácora
             const callersFromLogs = Array.from(new Set(dbLogs.map(l => l.caller_id).filter(Boolean)));
             if (callersFromLogs.length > 0) {
               setRecentIncomingCallers(callersFromLogs);
@@ -273,7 +317,6 @@ export default function CRMPage() {
           setIsSearchingDb(false);
         }
       } else {
-        // Fallback local
         const filtered = customers.filter(c =>
           c.caller_id.toLowerCase().includes(q.toLowerCase()) ||
           c.nombre_completo.toLowerCase().includes(q.toLowerCase()) ||
@@ -308,14 +351,18 @@ export default function CRMPage() {
             }
 
             if (newLog.tipo === 'entrante' && callerId) {
-              // Buscar cliente en Supabase con soporte de normalización de prefijo 77
-              let targetCustomer = customers.find(c => c.caller_id === callerId || c.caller_id === cleanCaller);
+              let targetCustomer = customers.find(c => 
+                c.caller_id === callerId || 
+                c.caller_id === cleanCaller ||
+                (c.telefonos_adicionales && (c.telefonos_adicionales.includes(callerId) || c.telefonos_adicionales.includes(cleanCaller)))
+              );
+
               if (!targetCustomer) {
                 try {
                   const { data: dbCusts } = await supabase
                     .from('clientes')
                     .select('*')
-                    .or(`caller_id.eq.${callerId},caller_id.eq.${cleanCaller}`);
+                    .or(`caller_id.eq.${callerId},caller_id.eq.${cleanCaller},telefonos_adicionales.cs.{"${callerId}"}`);
                   if (dbCusts && dbCusts.length > 0) {
                     targetCustomer = dbCusts[0];
                     setCustomers(prev => [targetCustomer!, ...prev.filter(c => c.id !== targetCustomer!.id)]);
@@ -348,11 +395,12 @@ export default function CRMPage() {
   const handleAcceptScreenPop = async (callerId: string) => {
     const cleanCaller = callerId.startsWith('77') ? callerId.substring(2) : callerId;
     
-    // 1. Buscar en memoria local primero
+    // 1. Buscar en memoria local primero (por callerId, prefijo o telefonos_adicionales)
     let customer = customers.find(c => 
       c.caller_id === callerId || 
       c.caller_id === cleanCaller || 
-      (cleanCaller && c.caller_id === `77${cleanCaller}`)
+      (cleanCaller && c.caller_id === `77${cleanCaller}`) ||
+      (c.telefonos_adicionales && (c.telefonos_adicionales.includes(callerId) || c.telefonos_adicionales.includes(cleanCaller)))
     );
 
     // 2. Si no está en memoria o es un placeholder previo con saldo 0, consultar a Supabase
@@ -361,7 +409,7 @@ export default function CRMPage() {
         const { data: dbMatches } = await supabase
           .from('clientes')
           .select('*')
-          .or(`caller_id.eq.${callerId},caller_id.eq.${cleanCaller}`);
+          .or(`caller_id.eq.${callerId},caller_id.eq.${cleanCaller},telefonos_adicionales.cs.{"${callerId}"}`);
         
         if (dbMatches && dbMatches.length > 0) {
           customer = dbMatches[0];
@@ -380,22 +428,21 @@ export default function CRMPage() {
       customer = {
         id: `c-${Date.now()}`,
         caller_id: callerId,
-        nombre_completo: `Cliente Nuevo (${callerId})`,
-        empresa: 'Empresa por registrar',
+        nombre_completo: `Nuevo Lead (${callerId})`,
+        empresa: 'Prospecto por registrar',
         direccion: 'Por capturar',
-        numero_tarjeta_mask: '**** **** **** 0000',
+        numero_tarjeta_mask: 'Pendiente de Asignación',
         saldo: 0.00,
         estatus_tarjeta: 1,
-        email: `${callerId}@contacto.mx`,
+        email: `${callerId}@prospecto.com`,
         telefonos_adicionales: [],
         fecha_nacimiento: '2000-01-01',
-        agente_asignado: 'Agente Demo 1',
+        agente_asignado: 'Ext. 2001',
         compras_previas: []
       };
       setCustomers(prev => [customer!, ...prev]);
     }
 
-    // Colocar al inicio de la lista de recientes
     setRecentIncomingCallers(prev => [callerId, cleanCaller, ...prev.filter(id => id !== callerId && id !== cleanCaller)]);
     setSelectedCustomerId(customer.id);
     setActiveDialNumber(customer.caller_id);
@@ -447,11 +494,14 @@ export default function CRMPage() {
             empresa: updated.empresa,
             direccion: updated.direccion,
             email: updated.email,
+            numero_tarjeta_mask: updated.numero_tarjeta_mask,
             agente_asignado: updated.agente_asignado,
             estatus_tarjeta: updated.estatus_tarjeta ?? 1,
             folio_cancelacion: updated.folio_cancelacion || null,
             motivo_cancelacion: updated.motivo_cancelacion || null,
             saldo: updated.saldo,
+            telefonos_adicionales: updated.telefonos_adicionales || [],
+            fecha_nacimiento: updated.fecha_nacimiento,
             updated_at: new Date().toISOString()
           })
           .eq('id', updated.id);
@@ -505,76 +555,43 @@ export default function CRMPage() {
     }
   };
 
-  // Crear nuevo cliente / lead y guardar en Supabase
-  const handleCreateCustomer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCustPhone.trim()) return;
-    const phone = newCustPhone.trim();
-    const newCust: Customer = {
-      id: `c-${Date.now()}`,
-      caller_id: phone,
-      nombre_completo: newCustName.trim() || `Contacto ${phone}`,
-      empresa: 'Empresa General',
-      direccion: 'Dirección por registrar',
-      numero_tarjeta_mask: `**** **** **** ${Math.floor(1000 + Math.random() * 9000)}`,
-      saldo: 5000.00,
-      estatus_tarjeta: 1,
-      email: `${phone}@empresa.com`,
-      telefonos_adicionales: [],
-      fecha_nacimiento: '1990-01-01',
-      agente_asignado: 'Agente Demo 1',
-      compras_previas: []
-    };
-
-    setCustomers(prev => [newCust, ...prev]);
-    setRecentIncomingCallers(prev => [phone, ...prev.filter(id => id !== phone)]);
-    setSelectedCustomerId(newCust.id);
-    setActiveDialNumber(newCust.caller_id);
-    setShowNewCustomerForm(false);
-    setNewCustName('');
-    setNewCustPhone('');
-
-    if (isSupabaseConfigured()) {
-      try {
-        await supabase.from('clientes').insert({
-          caller_id: newCust.caller_id,
-          nombre_completo: newCustName.trim() || `Contacto ${phone}`,
-          empresa: newCust.empresa,
-          direccion: newCust.direccion,
-          numero_tarjeta_mask: newCust.numero_tarjeta_mask,
-          saldo: newCust.saldo,
-          estatus_tarjeta: 1,
-          email: newCust.email,
-          agente_asignado: newCust.agente_asignado
-        });
-      } catch (err) {
-        console.warn('Error insertando cliente en Supabase:', err);
+  // Manejar cliente guardado desde el modal completo (INSERT o UPDATE)
+  const handleCustomerSavedFromModal = (savedCustomer: Customer, isNew: boolean) => {
+    if (isNew) {
+      setCustomers(prev => [savedCustomer, ...prev.filter(c => c.id !== savedCustomer.id)]);
+      if (isCustomerLead(savedCustomer)) {
+        setDirectoryTab('leads');
+      } else {
+        setDirectoryTab('todos');
       }
+    } else {
+      setCustomers(prev => prev.map(c => c.id === savedCustomer.id ? savedCustomer : c));
     }
+    setSelectedCustomerId(savedCustomer.id);
+    setActiveDialNumber(savedCustomer.caller_id);
+    setRecentIncomingCallers(prev => [savedCustomer.caller_id, ...prev.filter(id => id !== savedCustomer.caller_id)]);
   };
 
   // Métricas y conteos por categoría
   const countTotal = customers.length;
   const countCanceladas = customers.filter(c => c.estatus_tarjeta === 2).length;
-  const countLeads = customers.filter(c => (c.saldo === 0 || c.nombre_completo.toLowerCase().includes('cliente nuevo')) && c.estatus_tarjeta !== 2).length;
-  const countActivos = customers.filter(c => (c.estatus_tarjeta ?? 1) === 1 && !c.nombre_completo.toLowerCase().includes('cliente nuevo') && c.saldo > 0).length;
+  const countLeads = customers.filter(isCustomerLead).length;
+  const countActivos = customers.filter(c => (c.estatus_tarjeta ?? 1) === 1 && !isCustomerLead(c) && c.saldo > 0).length;
   const countRecientes = recentIncomingCallers.length;
 
   // Filtrado y ordenamiento del directorio
   let displayedCustomers: Customer[] = [];
 
   if (dbSearchResults !== null) {
-    // Si hay una búsqueda activa ligada a Supabase, mostrar esos resultados
     displayedCustomers = dbSearchResults;
   } else {
-    // Si no hay búsqueda de texto, aplicar filtro de pestaña
     let tabFiltered = [...customers];
     if (directoryTab === 'canceladas') {
       tabFiltered = tabFiltered.filter(c => c.estatus_tarjeta === 2);
     } else if (directoryTab === 'leads') {
-      tabFiltered = tabFiltered.filter(c => (c.saldo === 0 || c.nombre_completo.toLowerCase().includes('cliente nuevo')) && c.estatus_tarjeta !== 2);
+      tabFiltered = tabFiltered.filter(isCustomerLead);
     } else if (directoryTab === 'activos') {
-      tabFiltered = tabFiltered.filter(c => (c.estatus_tarjeta ?? 1) === 1 && !c.nombre_completo.toLowerCase().includes('cliente nuevo') && c.saldo > 0);
+      tabFiltered = tabFiltered.filter(c => (c.estatus_tarjeta ?? 1) === 1 && !isCustomerLead(c) && c.saldo > 0);
     } else if (directoryTab === 'recientes') {
       tabFiltered = tabFiltered.filter(c => 
         recentIncomingCallers.includes(c.caller_id) || 
@@ -589,7 +606,6 @@ export default function CRMPage() {
       if (idxA !== -1 && idxB !== -1) return idxA - idxB;
       if (idxA !== -1) return -1;
       if (idxB !== -1) return 1;
-      // Si ambos tienen el mismo estatus de llamada, priorizar tarjetas canceladas para atención
       if (a.estatus_tarjeta === 2 && b.estatus_tarjeta !== 2) return -1;
       if (b.estatus_tarjeta === 2 && a.estatus_tarjeta !== 2) return 1;
       return 0;
@@ -688,12 +704,22 @@ export default function CRMPage() {
             <span>VM: <strong className="font-mono text-emerald-400">{vmConfig.vmHost}</strong></span>
           </button>
 
-          {/* Botón de Simulación de Citas Médicas (Opción 4) */}
+          {/* Botón de Simulación Lead Nuevo IVR (7799881122) */}
           <button
-            onClick={() => setActiveTab('medical')}
-            className="bg-gradient-to-r from-teal-700 to-teal-800 hover:from-teal-600 hover:to-teal-700 text-white text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm transition active:scale-95"
+            onClick={() => {
+              setDirectoryTab('leads');
+              handleAcceptScreenPop('7799881122');
+              setScreenPopData({
+                callerId: '7799881122',
+                callType: 'entrante',
+                folio: 'LEAD-PSTN-7799881122',
+                reporte: 'Llamada entrante de Cliente Nuevo detectada en IVR. Canalizado a Opción 3 (Ventas) / Opción 4 (Expediente Clínico). Asignar tarjeta y registrar saldo inicial.'
+              });
+            }}
+            className="bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm transition active:scale-95"
+            title="Simular llamada entrante de Cliente Nuevo / Lead en IVR (Opción 3/4)"
           >
-            <Stethoscope className="w-3.5 h-3.5 text-teal-300" /> Citas Médicas (Opción 4)
+            <UserPlus className="w-3.5 h-3.5 text-amber-200" /> Lead IVR (7799881122)
           </button>
 
           {/* Botón de Simulación PSTN 7711100921 */}
@@ -724,10 +750,10 @@ export default function CRMPage() {
                 reporte: 'Incidencia Entrante: Anto Krpaz X (Extensión 1001) tiene Tarjeta Cancelada (Estatus 2 - Folio 2026-11-15-8821-1001). Saldo bloqueado en IVR Asterisk.'
               });
             }}
-            className="bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm transition active:scale-95"
+            className="bg-gradient-to-r from-rose-700 to-rose-800 hover:from-rose-600 hover:to-rose-700 text-white text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm transition active:scale-95"
             title="Simular llamada entrante desde la Extensión 1001 (Tarjeta Cancelada)"
           >
-            <Sparkles className="w-3.5 h-3.5" /> Pop 1001 (Cancelada)
+            <Lock className="w-3.5 h-3.5" /> Pop 1001 (Cancelada)
           </button>
 
           {/* Pop Outbound con Incidencia */}
@@ -771,6 +797,12 @@ export default function CRMPage() {
               <span className="p-1.5 bg-rose-50 text-rose-600 rounded-lg"><Lock className="w-3.5 h-3.5" /></span>
               <span className="text-slate-500 font-medium">Tarjetas Canceladas:</span>
               <span className="font-bold text-rose-700 font-mono">{countCanceladas}</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="p-1.5 bg-amber-50 text-amber-600 rounded-lg"><UserPlus className="w-3.5 h-3.5" /></span>
+              <span className="text-slate-500 font-medium">Leads / Prospectos:</span>
+              <span className="font-bold text-amber-700 font-mono">{countLeads}</span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -818,59 +850,26 @@ export default function CRMPage() {
             }}
           />
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* Columna Izquierda: Directorio Ordenado y Búsqueda en Base de Datos (3 columnas) */}
-            <div className="lg:col-span-3 space-y-4">
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+            {/* Columna Izquierda: Directorio Ordenado y Búsqueda en Base de Datos (4 columnas) */}
+            <div className="xl:col-span-4 lg:col-span-4 space-y-4">
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
                     <Users className="w-4 h-4 text-blue-600" /> Directorio de Clientes
                   </h3>
                   <button
-                    onClick={() => setShowNewCustomerForm(!showNewCustomerForm)}
-                    className="flex items-center gap-1 text-[11px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition"
-                    title="Dar de alta nuevo lead / cliente"
+                    onClick={() => {
+                      setRegModalMode('create');
+                      setRegTargetCustomer(null);
+                      setIsRegModalOpen(true);
+                    }}
+                    className="flex items-center gap-1.5 text-xs font-extrabold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-xl border border-blue-200 shadow-xs transition active:scale-95"
+                    title="Alta completa de nuevo cliente o lead en base de datos (INSERT)"
                   >
-                    <Plus className="w-3.5 h-3.5" /> Nuevo Lead
+                    <UserPlus className="w-3.5 h-3.5" /> Registrar Cliente / Lead
                   </button>
                 </div>
-
-                {/* Formulario rápido de nuevo cliente */}
-                {showNewCustomerForm && (
-                  <form onSubmit={handleCreateCustomer} className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs animate-in fade-in">
-                    <span className="font-bold text-slate-700 block">Registrar Nuevo Lead / Contacto</span>
-                    <input
-                      type="text"
-                      placeholder="Nombre del cliente"
-                      value={newCustName}
-                      onChange={(e) => setNewCustName(e.target.value)}
-                      className="w-full p-2 border border-slate-300 rounded-lg bg-white"
-                    />
-                    <input
-                      type="text"
-                      placeholder="CallerID / Teléfono (ej. 7711100921)"
-                      value={newCustPhone}
-                      onChange={(e) => setNewCustPhone(e.target.value)}
-                      required
-                      className="w-full p-2 border border-slate-300 rounded-lg bg-white font-mono"
-                    />
-                    <div className="flex justify-end gap-1.5 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => setShowNewCustomerForm(false)}
-                        className="px-2.5 py-1 text-slate-500 hover:text-slate-700"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-3 py-1 bg-blue-600 text-white font-bold rounded-lg shadow-xs"
-                      >
-                        Guardar Lead
-                      </button>
-                    </div>
-                  </form>
-                )}
 
                 {/* Buscador Integrado Ligado a Supabase (SELECT) */}
                 <div className="relative">
@@ -887,12 +886,12 @@ export default function CRMPage() {
                   )}
                 </div>
 
-                {/* Pestañas de Filtrado del Directorio */}
+                {/* Pestañas de Filtrado del Directorio con Scroll Horizontal Fluido */}
                 {!searchQuery && (
-                  <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[11px] font-bold border-b border-slate-100">
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 text-[11px] font-bold border-b border-slate-100 scrollbar-none">
                     <button
                       onClick={() => setDirectoryTab('todos')}
-                      className={`px-2 py-1 rounded-lg transition whitespace-nowrap ${
+                      className={`px-2.5 py-1 rounded-lg transition whitespace-nowrap ${
                         directoryTab === 'todos' 
                           ? 'bg-slate-900 text-white shadow-xs' 
                           : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
@@ -902,10 +901,10 @@ export default function CRMPage() {
                     </button>
                     <button
                       onClick={() => setDirectoryTab('canceladas')}
-                      className={`px-2 py-1 rounded-lg transition whitespace-nowrap flex items-center gap-1 ${
+                      className={`px-2.5 py-1 rounded-lg transition whitespace-nowrap flex items-center gap-1 ${
                         directoryTab === 'canceladas' 
                           ? 'bg-rose-600 text-white shadow-xs' 
-                          : 'text-rose-700 bg-rose-50 hover:bg-rose-100'
+                          : 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200'
                       }`}
                       title="Tarjetas bloqueadas en Estatus 2"
                     >
@@ -913,17 +912,17 @@ export default function CRMPage() {
                     </button>
                     <button
                       onClick={() => setDirectoryTab('leads')}
-                      className={`px-2 py-1 rounded-lg transition whitespace-nowrap ${
+                      className={`px-2.5 py-1 rounded-lg transition whitespace-nowrap flex items-center gap-1 ${
                         directoryTab === 'leads' 
                           ? 'bg-amber-600 text-white shadow-xs' 
-                          : 'text-amber-700 hover:bg-amber-50'
+                          : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200'
                       }`}
                     >
-                      Leads ({countLeads})
+                      <UserPlus className="w-3 h-3" /> Leads ({countLeads})
                     </button>
                     <button
                       onClick={() => setDirectoryTab('activos')}
-                      className={`px-2 py-1 rounded-lg transition whitespace-nowrap ${
+                      className={`px-2.5 py-1 rounded-lg transition whitespace-nowrap ${
                         directoryTab === 'activos' 
                           ? 'bg-emerald-600 text-white shadow-xs' 
                           : 'text-emerald-700 hover:bg-emerald-50'
@@ -933,7 +932,7 @@ export default function CRMPage() {
                     </button>
                     <button
                       onClick={() => setDirectoryTab('recientes')}
-                      className={`px-2 py-1 rounded-lg transition whitespace-nowrap ${
+                      className={`px-2.5 py-1 rounded-lg transition whitespace-nowrap ${
                         directoryTab === 'recientes' 
                           ? 'bg-blue-600 text-white shadow-xs' 
                           : 'text-blue-700 hover:bg-blue-50'
@@ -957,12 +956,12 @@ export default function CRMPage() {
                   </div>
                 )}
 
-                {/* Lista de Clientes Ordenada */}
+                {/* Lista de Clientes Ordenada con Nombres Completos sin Recortes */}
                 <div className="space-y-2 max-h-[640px] overflow-y-auto pr-1">
                   {displayedCustomers.map((cust) => {
                     const isSelected = cust.id === selectedCustomerId;
                     const isCancelled = cust.estatus_tarjeta === 2;
-                    const isNewLead = cust.saldo === 0 || cust.nombre_completo.toLowerCase().includes('cliente nuevo');
+                    const isLead = isCustomerLead(cust);
                     const isRecent = recentIncomingCallers.includes(cust.caller_id) || 
                       (cust.caller_id.startsWith('77') && recentIncomingCallers.includes(cust.caller_id.substring(2)));
 
@@ -973,7 +972,7 @@ export default function CRMPage() {
                           setSelectedCustomerId(cust.id);
                           setActiveDialNumber(cust.caller_id);
                         }}
-                        className={`w-full text-left p-3 rounded-xl border transition group relative ${
+                        className={`w-full text-left p-3.5 rounded-xl border transition group relative ${
                           isSelected
                             ? isCancelled 
                               ? 'bg-rose-50/90 border-rose-500 shadow-sm ring-1 ring-rose-400'
@@ -983,9 +982,9 @@ export default function CRMPage() {
                               : 'bg-slate-50/80 hover:bg-slate-100 border-slate-200/80'
                         }`}
                       >
-                        {/* Cabecera del Item: Nombre y Badges */}
-                        <div className="flex items-center justify-between gap-1.5">
-                          <span className="font-bold text-slate-800 text-xs truncate max-w-[150px]">
+                        {/* Cabecera del Item: Nombre Completo y CallerID */}
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="font-bold text-slate-800 text-xs leading-snug break-words flex-1">
                             {cust.nombre_completo}
                           </span>
                           <span className="text-[10px] font-mono bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-md font-bold shrink-0">
@@ -994,17 +993,17 @@ export default function CRMPage() {
                         </div>
 
                         {/* Subtítulo y Empresa */}
-                        <p className="text-[11px] text-slate-500 truncate mt-0.5">{cust.empresa}</p>
+                        <p className="text-[11px] text-slate-500 truncate mt-1">{cust.empresa}</p>
 
                         {/* Badges de Estado y Folio */}
-                        <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap mt-2">
                           {isCancelled ? (
                             <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-rose-200 text-rose-900 border border-rose-300 flex items-center gap-1">
                               <Lock className="w-2.5 h-2.5" /> CANCELADA (2)
                             </span>
-                          ) : isNewLead ? (
-                            <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
-                              NUEVO LEAD
+                          ) : isLead ? (
+                            <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1">
+                              <UserPlus className="w-2.5 h-2.5" /> NUEVO LEAD
                             </span>
                           ) : (
                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
@@ -1040,8 +1039,8 @@ export default function CRMPage() {
                   {displayedCustomers.length === 0 && (
                     <div className="py-8 text-center text-slate-400 text-xs italic space-y-1">
                       <p>No se encontraron registros {searchQuery ? `para "${searchQuery}"` : 'en esta categoría'}.</p>
-                      {directoryTab === 'canceladas' && (
-                        <p className="text-[11px] text-slate-500">No hay tarjetas con bloqueo de Estatus 2.</p>
+                      {directoryTab === 'leads' && (
+                        <p className="text-[11px] text-slate-500">Los clientes nuevos que marquen al IVR aparecerán aquí automáticamente.</p>
                       )}
                     </div>
                   )}
@@ -1049,13 +1048,18 @@ export default function CRMPage() {
               </div>
             </div>
 
-            {/* Columna Central: Perfil 360 con Gestión de Desbloqueo, Bitácora y Calendario (6 columnas) */}
-            <div className="lg:col-span-6 space-y-6">
+            {/* Columna Central: Perfil 360 con Gestión de Desbloqueo, Bitácora y Calendario (5 columnas) */}
+            <div className="xl:col-span-5 lg:col-span-5 space-y-6">
               <CustomerProfile
                 customer={activeCustomer}
                 onSaveCustomer={handleSaveCustomer}
                 onCallNumber={handleDirectOutboundCall}
                 onLogAdded={handleAddNote}
+                onOpenEditModal={() => {
+                  setRegModalMode('edit');
+                  setRegTargetCustomer(activeCustomer);
+                  setIsRegModalOpen(true);
+                }}
               />
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1075,7 +1079,7 @@ export default function CRMPage() {
             </div>
 
             {/* Columna Derecha: Dialer SIP WebRTC Outbound & Tarjeta VM (3 columnas) */}
-            <div className="lg:col-span-3 space-y-6">
+            <div className="xl:col-span-3 lg:col-span-3 space-y-6">
               <WebRTCDialer
                 currentPhoneNumber={activeDialNumber}
                 autoStartCallTimestamp={autoStartCallTs}
@@ -1114,19 +1118,33 @@ export default function CRMPage() {
           callType={screenPopData.callType}
           incidentFolio={screenPopData.folio}
           incidentReport={screenPopData.reporte}
-          onAccept={handleAcceptScreenPop}
+          onAccept={() => handleAcceptScreenPop(screenPopData.callerId)}
           onDismiss={() => setScreenPopData(null)}
-          onSaveIncidentNotes={handleSaveIncidentNotes}
+          onSaveIncidentNotes={(notes) => handleSaveIncidentNotes(screenPopData.callerId, notes)}
         />
       )}
 
       {/* Modal de Conexión de Máquina Virtual / Localhost */}
-      <VMConnectionModal
-        isOpen={isVMModalOpen}
-        onClose={() => setIsVMModalOpen(false)}
-        config={vmConfig}
-        onUpdateConfig={(newCfg) => setVmConfig(newCfg)}
-      />
+      {isVMModalOpen && (
+        <VMConnectionModal
+          isOpen={isVMModalOpen}
+          onClose={() => setIsVMModalOpen(false)}
+          config={vmConfig}
+          onUpdateConfig={(newCfg) => setVmConfig(newCfg)}
+        />
+      )}
+
+      {/* Modal Completo de Alta y Modificación de Clientes (INSERT y UPDATE) */}
+      {isRegModalOpen && (
+        <CustomerRegistrationModal
+          isOpen={isRegModalOpen}
+          onClose={() => setIsRegModalOpen(false)}
+          mode={regModalMode}
+          initialCustomer={regTargetCustomer}
+          existingCustomers={customers}
+          onCustomerSaved={handleCustomerSavedFromModal}
+        />
+      )}
     </div>
   );
 }

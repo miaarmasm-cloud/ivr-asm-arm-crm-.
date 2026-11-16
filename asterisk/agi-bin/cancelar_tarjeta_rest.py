@@ -203,12 +203,28 @@ def main():
     caller_id = sys.argv[1] if len(sys.argv) > 1 else agi_env.get("agi_callerid", "1001")
     tarjeta_dtmf = sys.argv[2] if len(sys.argv) > 2 else ""
 
-    # 1. Consultar cliente en Supabase por CallerID o dígitos
+    # 1. Consultar cliente en Supabase por CallerID (con soporte de prefijo 77 y telefonos_adicionales)
     cliente = None
     if caller_id and caller_id != "DIRECTO":
-        clientes = http_get(f"clientes?caller_id=eq.{caller_id}&select=*")
-        if clientes:
-            cliente = clientes[0]
+        cid_str = str(caller_id).strip()
+        candidatos = [cid_str]
+        if cid_str.startswith("77"):
+            candidatos.append(cid_str[2:])
+        else:
+            candidatos.append(f"77{cid_str}")
+
+        for cid in candidatos:
+            clientes = http_get(f"clientes?caller_id=eq.{cid}&select=*")
+            if clientes:
+                cliente = clientes[0]
+                break
+
+        if not cliente:
+            for cid in candidatos:
+                clientes = http_get(f"clientes?telefonos_adicionales=cs.{{{cid}}}&select=*")
+                if clientes:
+                    cliente = clientes[0]
+                    break
 
     if not cliente and tarjeta_dtmf:
         terminacion = extraer_ultimos_4(tarjeta_dtmf)

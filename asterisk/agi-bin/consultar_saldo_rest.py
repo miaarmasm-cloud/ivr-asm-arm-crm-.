@@ -80,18 +80,38 @@ def consultar_supabase_rest(tarjeta, caller_id):
         except Exception as e:
             sys.stderr.write(f"Error consultando Supabase por tarjeta: {e}\n")
 
-    # Búsqueda 2: Fallback por Caller ID de la extensión que llama
+    # Búsqueda 2: Fallback por Caller ID (con soporte de prefijo 77 y telefonos_adicionales)
     if caller_id:
-        url = f"{SUPABASE_URL}/rest/v1/clientes?caller_id=eq.{caller_id}&select=*"
-        req = urllib.request.Request(url, headers=headers, method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=5) as response:
-                if response.status == 200:
-                    data = json.loads(response.read().decode())
-                    if data and len(data) > 0:
-                        return data[0]
-        except Exception as e:
-            sys.stderr.write(f"Error consultando Supabase por caller_id: {e}\n")
+        cid_str = str(caller_id).strip()
+        candidatos = [cid_str]
+        if cid_str.startswith("77"):
+            candidatos.append(cid_str[2:])
+        else:
+            candidatos.append(f"77{cid_str}")
+
+        for cid in candidatos:
+            url = f"{SUPABASE_URL}/rest/v1/clientes?caller_id=eq.{cid}&select=*"
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=4) as response:
+                    if response.status == 200:
+                        data = json.loads(response.read().decode())
+                        if data and len(data) > 0:
+                            return data[0]
+            except Exception:
+                pass
+
+        for cid in candidatos:
+            url = f"{SUPABASE_URL}/rest/v1/clientes?telefonos_adicionales=cs.{{{cid}}}&select=*"
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=4) as response:
+                    if response.status == 200:
+                        data = json.loads(response.read().decode())
+                        if data and len(data) > 0:
+                            return data[0]
+            except Exception:
+                pass
 
     return None
 

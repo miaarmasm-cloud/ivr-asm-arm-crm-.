@@ -29,7 +29,10 @@ import {
   AlertTriangle,
   Copy,
   Check,
-  Tag
+  Tag,
+  Edit3,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 interface Props {
@@ -37,13 +40,23 @@ interface Props {
   onSaveCustomer: (updated: Customer) => void;
   onCallNumber: (phone: string) => void;
   onLogAdded?: (note: string) => void;
+  onOpenEditModal?: () => void;
 }
 
-export default function CustomerProfile({ customer, onSaveCustomer, onCallNumber, onLogAdded }: Props) {
+export default function CustomerProfile({ 
+  customer, 
+  onSaveCustomer, 
+  onCallNumber, 
+  onLogAdded,
+  onOpenEditModal
+}: Props) {
   const [formData, setFormData] = useState<Customer | null>(customer);
   const [isSaved, setIsSaved] = useState(false);
   const [copiedFolio, setCopiedFolio] = useState(false);
   
+  // Enmascaramiento deshabilitado para visualizar y capturar dígitos de tarjeta
+  const [showUnmaskedCard, setShowUnmaskedCard] = useState(true);
+
   // Estados para acciones API directas
   const [isQueryingBalance, setIsQueryingBalance] = useState(false);
   const [balanceMessage, setBalanceMessage] = useState<string | null>(null);
@@ -292,6 +305,17 @@ export default function CustomerProfile({ customer, onSaveCustomer, onCallNumber
             </button>
           )}
 
+          {/* Botón para Modificar y Corregir Expediente (UPDATE) */}
+          {onOpenEditModal && (
+            <button
+              onClick={onOpenEditModal}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold shadow-sm transition active:scale-95"
+              title="Modificar datos, tarjeta o razón social por error del asesor (UPDATE)"
+            >
+              <Edit3 className="w-4 h-4 text-blue-400" /> Modificar (UPDATE)
+            </button>
+          )}
+
           <button
             onClick={handleSave}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition shadow-sm active:scale-95 ${
@@ -465,7 +489,7 @@ export default function CustomerProfile({ customer, onSaveCustomer, onCallNumber
           />
         </div>
 
-        {/* Tarjeta Enmascarada */}
+        {/* Tarjeta Asociada con Enmascaramiento Deshabilitable */}
         <div>
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs font-semibold text-slate-500 uppercase flex items-center gap-1.5">
@@ -477,14 +501,24 @@ export default function CustomerProfile({ customer, onSaveCustomer, onCallNumber
               {isCardActive ? 'ACTIVA (1)' : 'CANCELADA (2)'}
             </span>
           </div>
-          <input
-            type="text"
-            value={formData.numero_tarjeta_mask}
-            onChange={(e) => handleChange('numero_tarjeta_mask', e.target.value)}
-            className={`w-full text-sm font-mono border rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-              isCardActive ? 'bg-slate-50 border-slate-300' : 'bg-rose-50/50 border-rose-300 text-rose-900 font-bold'
-            }`}
-          />
+          <div className="relative">
+            <input
+              type={showUnmaskedCard ? 'text' : 'password'}
+              value={formData.numero_tarjeta_mask}
+              onChange={(e) => handleChange('numero_tarjeta_mask', e.target.value)}
+              className={`w-full text-sm font-mono border rounded-xl pl-3 pr-9 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                isCardActive ? 'bg-slate-50 border-slate-300 text-slate-800' : 'bg-rose-50/50 border-rose-300 text-rose-900 font-bold'
+              }`}
+            />
+            <button
+              type="button"
+              onClick={() => setShowUnmaskedCard(!showUnmaskedCard)}
+              className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+              title={showUnmaskedCard ? 'Ocultar dígitos' : 'Ver dígitos sin enmascarar'}
+            >
+              {showUnmaskedCard ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
         </div>
 
         {/* Saldo con Tarjeta */}
@@ -552,7 +586,7 @@ export default function CustomerProfile({ customer, onSaveCustomer, onCallNumber
             value={formData.telefonos_adicionales?.join(', ') || ''}
             onChange={(e) => handleChange('telefonos_adicionales', e.target.value.split(',').map(s => s.trim()))}
             placeholder="+52..., +52..."
-            className="w-full text-sm border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full text-sm border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
           />
         </div>
 

@@ -120,6 +120,51 @@ def consultar_cliente_por_callerid(caller_id):
         except Exception as e:
             sys.stderr.write(f"Error consultando caller_id ({cid}): {e}\n")
 
+    # Búsqueda 2: En telefonos_adicionales para evitar duplicados si el cliente tiene múltiples líneas
+    for cid in candidatos:
+        url = f"{SUPABASE_URL}/rest/v1/clientes?telefonos_adicionales=cs.{{{cid}}}&select=*"
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode())
+                    if data and len(data) > 0:
+                        return data[0]
+        except Exception:
+            pass
+
+    return None
+
+def crear_lead_prospecto(caller_id, extension_agente):
+    """Inserta automáticamente un cliente nuevo / lead en Supabase para que aparezca en el CRM."""
+    url = f"{SUPABASE_URL}/rest/v1/clientes"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+    payload = {
+        "caller_id": str(caller_id),
+        "nombre_completo": f"Nuevo Lead ({caller_id})",
+        "empresa": "Prospecto por registrar",
+        "direccion": "Pendiente de captura",
+        "numero_tarjeta_mask": "Pendiente de Asignación",
+        "saldo": 0.00,
+        "estatus_tarjeta": 1,
+        "email": f"{caller_id}@prospecto.com",
+        "telefonos_adicionales": [],
+        "agente_asignado": f"Ext. {extension_agente}"
+    }
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            if resp.status in (200, 201):
+                data = json.loads(resp.read().decode())
+                if data and len(data) > 0:
+                    return data[0]
+    except Exception as e:
+        sys.stderr.write(f"Error creando lead prospecto: {e}\n")
     return None
 
 def registrar_inicio_llamada_bitacora(caller_id, cliente_id, did_marcado, campana, nombre_cliente=None):
@@ -252,11 +297,16 @@ def main():
     if str(did_marcado).strip() in ["8000", "8009990000", "5550001000"]:
         enrutamiento_directo = None
 
-    # 2. Consultar Cliente por CallerID
+    # 2. Consultar Cliente por CallerID (con soporte de números adicionales y normalización)
     cliente = consultar_cliente_por_callerid(caller_id)
+    es_lead_nuevo = False
+    if not cliente and caller_id and caller_id != "DIRECTO":
+        cliente = crear_lead_prospecto(caller_id, extension_agente)
+        es_lead_nuevo = True
+
     cliente_id = cliente.get("id") if cliente else None
     nombre_completo = cliente.get("nombre_completo", "") if cliente else ""
-    primer_nombre = nombre_completo.split()[0] if nombre_completo else ""
+    primer_nombre = nombre_completo.split()[0] if nombre_completo and not es_lead_nuevo else ""
 
     # 3. REGISTRAR LLAMADA Y OBTENER EL ID ÚNICO E IRREPETIBLE (ADN DE LA LLAMADA)
     call_uuid, grabacion_url = registrar_inicio_llamada_bitacora(
@@ -276,7 +326,7 @@ def main():
     agi_cmd(f'SET VARIABLE EXT_AGENTE_CAMPANA "{extension_agente}"')
     agi_cmd(f'SET VARIABLE ENRUTAR_DIRECTO "{enrutamiento_directo or ""}"')
 
-    if cliente:
+    if cliente and not es_lead_nuevo:
         saldo = float(cliente.get("saldo", 0.0))
         tarjeta_mask = cliente.get("numero_tarjeta_mask", "")
         estatus = int(cliente.get("estatus_tarjeta", 1))
@@ -352,7 +402,7 @@ def main():
         return
 
     # CASO D: CAMPAÑA DE ATENCIÓN A CLIENTES GENERAL (BIFURCACIÓN DE 2 IVRs SEGÚN HISTORIAL)
-    if cliente:
+    if cliente and not es_lead_nuevo:
         # IVR 1: CLIENTES EXISTENTES (CON HISTORIAL CLÍNICO, SALDO Y TARJETA ACTIVA)
         texto_saludo = (
             f"Hola {primer_nombre}, bienvenido nuevamente a su sistema inteligente ARM. "
