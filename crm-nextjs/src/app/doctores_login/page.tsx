@@ -463,7 +463,7 @@ export default function DoctoresLoginPage() {
 
         // 4. Registrar en CBR (Case-Based Reasoning: cbr_casos) para IA Gemini y memoria IVR
         const cbrProblema = `Paciente ${consultTargetPatient.nombre} (${consultTargetPatient.caller_id}) acudió a consulta por: ${consultMotivo}. Diagnóstico clínico emitido: ${consultDiagnostico}.`;
-        const cbrSolucion = `Especialista ${loggedDoctor.nombre_completo} prescribió: ${consultReceta}. Evolución clínica registrada: ${consultEvolucion || 'Evolución favorable con apego farmacológico.'}. ${proximaCitaFecha ? `Próxima cita de seguimiento programada para el ${proximaCitaFecha} a las ${proximaCitaHora} hrs.` : ''}`;
+        const cbrSolucion = `Especialista ${loggedDoctor.nombre_completo} prescribió: ${consultReceta}. Evolución clínica registrada: ${consultNotas || 'Evolución favorable con apego farmacológico.'}. ${proximaCitaFecha ? `Próxima cita de seguimiento programada para el ${proximaCitaFecha} a las ${proximaCitaHora} hrs.` : ''}`;
         
         await supabase.from('cbr_casos').insert({
           categoria: 'consulta_medica_seguimiento',
