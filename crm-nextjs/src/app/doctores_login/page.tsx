@@ -527,8 +527,13 @@ export default function DoctoresLoginPage() {
           });
         }
 
-        // Identificador de sesión y Folio de Hito homologado
-        const sessionUUID = crypto.randomUUID();
+        // Identificador de sesión y Folio de Hito homologado (Compatible con HTTP y HTTPS)
+        const sessionUUID = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+              const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+              return v.toString(16);
+            });
         const folioHito = `HITO-${consultTargetPatient.caller_id}-${todayStr.replace(/-/g, '')}-${sessionUUID.slice(0, 8).toUpperCase()}`;
 
         // 3. Registrar en llamadas_bitacora con trazabilidad unificada
